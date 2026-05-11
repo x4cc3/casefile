@@ -5,10 +5,16 @@ Track durable security cases during bug bounties, CTFs, and security audits. Eac
 ## Install
 
 ```bash
-pi install git:github.com/YOUR_USERNAME/casefile
+pi install npm:pi-casefile
 ```
 
-Or for local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
+Or from source:
+
+```bash
+pi install git:github.com/x4cc3/casefile
+```
+
+For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 
 ## Tools
 
