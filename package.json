@@ -1,11 +1,15 @@
 {
   "name": "pi-casefile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Offensive security case tracker for pi — bug bounties, CTFs, security audits",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "main": "index.ts",
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
