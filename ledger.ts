@@ -9,8 +9,9 @@
  */
 
 import { createHash, randomUUID } from "crypto";
-import { mkdir, readFile, appendFile, writeFile } from "fs/promises";
-import { dirname, join } from "path";
+import { existsSync } from "fs";
+import { mkdir, readFile, appendFile, writeFile, rename, open, rm, stat } from "fs/promises";
+import { dirname, join, resolve } from "path";
 import { homedir } from "os";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -140,10 +141,98 @@ function stableShortId(input: string): string {
 // ── Ledger Path ──────────────────────────────────────────────────────
 
 let ledgerPathOverride: string | undefined;
+let mutationQueue: Promise<void> = Promise.resolve();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function detectWorkspaceRoot(): string {
+  const envCandidates = [
+    process.env.PI_WORKSPACE_ROOT,
+    process.env.PI_PROJECT_ROOT,
+    process.env.INIT_CWD,
+    process.env.PWD,
+  ].filter((value): value is string => Boolean(value?.trim()));
+
+  for (const candidate of envCandidates) {
+    const resolved = resolve(candidate);
+    if (existsSync(resolved)) return resolved;
+  }
+
+  let current = resolve(process.cwd());
+  while (true) {
+    if (existsSync(join(current, ".git"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return resolve(process.cwd());
+    current = parent;
+  }
+}
 
 export function getCasefilePath(): string {
   if (ledgerPathOverride) return ledgerPathOverride;
-  return join(homedir(), ".pi", "casefile", "casefile.jsonl");
+
+  const explicitPath = process.env.PI_CASEFILE_PATH?.trim();
+  if (explicitPath) return resolve(explicitPath);
+
+  const scope = (process.env.PI_CASEFILE_SCOPE?.trim().toLowerCase() || "project");
+  if (scope === "global") {
+    return join(homedir(), ".pi", "casefile", "casefile.jsonl");
+  }
+
+  return join(detectWorkspaceRoot(), ".pi", "casefile.jsonl");
+}
+
+async function acquireLedgerLock(): Promise<() => Promise<void>> {
+  const ledgerPath = getCasefilePath();
+  const lockPath = `${ledgerPath}.lock`;
+  await mkdir(dirname(ledgerPath), { recursive: true });
+
+  const timeoutMs = 15_000;
+  const staleMs = 30_000;
+  const started = Date.now();
+
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx");
+      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: nowIso() }), "utf8");
+      await handle.close();
+      return async () => {
+        await rm(lockPath, { force: true });
+      };
+    } catch (error: any) {
+      if (error?.code !== "EEXIST") throw error;
+
+      try {
+        const info = await stat(lockPath);
+        if (Date.now() - info.mtimeMs > staleMs) {
+          await rm(lockPath, { force: true });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      if (Date.now() - started > timeoutMs) {
+        throw new Error(`Timed out waiting for casefile lock: ${lockPath}`);
+      }
+      await sleep(50);
+    }
+  }
+}
+
+async function withLedgerMutation<T>(fn: () => Promise<T>): Promise<T> {
+  const run = mutationQueue.then(async () => {
+    const release = await acquireLedgerLock();
+    try {
+      return await fn();
+    } finally {
+      await release();
+    }
+  });
+
+  mutationQueue = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 /** For testing only */
@@ -226,17 +315,21 @@ async function writeCasefile(records: CaseRecord[]): Promise<void> {
   const ledgerPath = getCasefilePath();
   await mkdir(dirname(ledgerPath), { recursive: true });
   const body = records.map((r) => JSON.stringify(r)).join("\n");
-  await writeFile(ledgerPath, body ? `${body}\n` : "", "utf8");
+  const tempPath = `${ledgerPath}.${randomUUID()}.tmp`;
+  await writeFile(tempPath, body ? `${body}\n` : "", "utf8");
+  await rename(tempPath, ledgerPath);
 }
 
 // ── Add (append-based) ───────────────────────────────────────────────
 
 export async function addCase(input: CaseInput): Promise<CaseRecord> {
-  const record = normalizeCase(input);
-  const ledgerPath = getCasefilePath();
-  await mkdir(dirname(ledgerPath), { recursive: true });
-  await appendFile(ledgerPath, `${JSON.stringify(record)}\n`, "utf8");
-  return record;
+  return withLedgerMutation(async () => {
+    const record = normalizeCase(input);
+    const ledgerPath = getCasefilePath();
+    await mkdir(dirname(ledgerPath), { recursive: true });
+    await appendFile(ledgerPath, `${JSON.stringify(record)}\n`, "utf8");
+    return record;
+  });
 }
 
 // ── Update (append-based — dedup on read picks up latest) ────────────
@@ -245,56 +338,60 @@ export async function updateCase(
   id: string,
   update: CaseUpdate,
 ): Promise<CaseRecord> {
-  const records = await readCasefile();
-  const current = records.find((r) => r.id === id);
-  if (!current) {
-    throw new Error(`Case not found: ${id}`);
-  }
-  const next = normalizeCase(
-    {
-      title: update.title ?? current.title,
-      status: update.status ?? current.status,
-      confidence: update.confidence ?? current.confidence,
-      severity: update.severity ?? current.severity,
-      priority: update.priority ?? current.priority,
-      target: update.target ?? current.target,
-      endpoint: update.endpoint ?? current.endpoint,
-      bugClass: update.bugClass ?? current.bugClass,
-      evidence: update.evidence ?? current.evidence,
-      impact: update.impact ?? current.impact,
-      nextStep: update.nextStep ?? current.nextStep,
-      poc: update.poc ?? current.poc,
-      remediation: update.remediation ?? current.remediation,
-      references: update.references ?? current.references,
-      blockers: update.blockers ?? current.blockers,
-      tags: update.tags ?? current.tags,
-      linkedCaseIds: update.linkedCaseIds ?? current.linkedCaseIds,
-    },
-    current,
-  );
-  // Append updated record — dedup on read picks up the latest version
-  const ledgerPath = getCasefilePath();
-  await mkdir(dirname(ledgerPath), { recursive: true });
-  await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
-  return next;
+  return withLedgerMutation(async () => {
+    const records = await readCasefile();
+    const current = records.find((r) => r.id === id);
+    if (!current) {
+      throw new Error(`Case not found: ${id}`);
+    }
+    const next = normalizeCase(
+      {
+        title: update.title ?? current.title,
+        status: update.status ?? current.status,
+        confidence: update.confidence ?? current.confidence,
+        severity: update.severity ?? current.severity,
+        priority: update.priority ?? current.priority,
+        target: update.target ?? current.target,
+        endpoint: update.endpoint ?? current.endpoint,
+        bugClass: update.bugClass ?? current.bugClass,
+        evidence: update.evidence ?? current.evidence,
+        impact: update.impact ?? current.impact,
+        nextStep: update.nextStep ?? current.nextStep,
+        poc: update.poc ?? current.poc,
+        remediation: update.remediation ?? current.remediation,
+        references: update.references ?? current.references,
+        blockers: update.blockers ?? current.blockers,
+        tags: update.tags ?? current.tags,
+        linkedCaseIds: update.linkedCaseIds ?? current.linkedCaseIds,
+      },
+      current,
+    );
+    // Append updated record — dedup on read picks up the latest version
+    const ledgerPath = getCasefilePath();
+    await mkdir(dirname(ledgerPath), { recursive: true });
+    await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
+    return next;
+  });
 }
 
 // ── Delete (full rewrite — removes record + cleans dangling refs) ────
 
 export async function deleteCase(id: string): Promise<CaseRecord> {
-  const records = await readCasefile();
-  const index = records.findIndex((r) => r.id === id);
-  if (index === -1) {
-    throw new Error(`Case not found: ${id}`);
-  }
-  const [removed] = records.splice(index, 1);
-  for (const record of records) {
-    if (record.linkedCaseIds.includes(id)) {
-      record.linkedCaseIds = record.linkedCaseIds.filter((lid) => lid !== id);
+  return withLedgerMutation(async () => {
+    const records = await readCasefile();
+    const index = records.findIndex((r) => r.id === id);
+    if (index === -1) {
+      throw new Error(`Case not found: ${id}`);
     }
-  }
-  await writeCasefile(records);
-  return removed;
+    const [removed] = records.splice(index, 1);
+    for (const record of records) {
+      if (record.linkedCaseIds.includes(id)) {
+        record.linkedCaseIds = record.linkedCaseIds.filter((lid) => lid !== id);
+      }
+    }
+    await writeCasefile(records);
+    return removed;
+  });
 }
 
 // ── Link (atomic: single write for both directions) ──────────────────
@@ -303,27 +400,29 @@ export async function linkCases(
   sourceId: string,
   targetId: string,
 ): Promise<{ source: CaseRecord; target: CaseRecord }> {
-  if (sourceId === targetId) {
-    throw new Error("Cannot link a case to itself");
-  }
-  const records = await readCasefile();
-  const source = records.find((r) => r.id === sourceId);
-  const target = records.find((r) => r.id === targetId);
-  if (!source) throw new Error(`Case not found: ${sourceId}`);
-  if (!target) throw new Error(`Case not found: ${targetId}`);
+  return withLedgerMutation(async () => {
+    if (sourceId === targetId) {
+      throw new Error("Cannot link a case to itself");
+    }
+    const records = await readCasefile();
+    const source = records.find((r) => r.id === sourceId);
+    const target = records.find((r) => r.id === targetId);
+    if (!source) throw new Error(`Case not found: ${sourceId}`);
+    if (!target) throw new Error(`Case not found: ${targetId}`);
 
-  if (!source.linkedCaseIds.includes(targetId)) {
-    source.linkedCaseIds = [...source.linkedCaseIds, targetId];
-  }
-  if (!target.linkedCaseIds.includes(sourceId)) {
-    target.linkedCaseIds = [...target.linkedCaseIds, sourceId];
-  }
-  const now = nowIso();
-  source.updatedAt = now;
-  target.updatedAt = now;
+    if (!source.linkedCaseIds.includes(targetId)) {
+      source.linkedCaseIds = [...source.linkedCaseIds, targetId];
+    }
+    if (!target.linkedCaseIds.includes(sourceId)) {
+      target.linkedCaseIds = [...target.linkedCaseIds, sourceId];
+    }
+    const now = nowIso();
+    source.updatedAt = now;
+    target.updatedAt = now;
 
-  await writeCasefile(records);
-  return { source, target };
+    await writeCasefile(records);
+    return { source, target };
+  });
 }
 
 // ── Unlink (atomic: single write) ────────────────────────────────────
@@ -332,20 +431,22 @@ export async function unlinkCases(
   sourceId: string,
   targetId: string,
 ): Promise<{ source: CaseRecord; target: CaseRecord }> {
-  const records = await readCasefile();
-  const source = records.find((r) => r.id === sourceId);
-  const target = records.find((r) => r.id === targetId);
-  if (!source) throw new Error(`Case not found: ${sourceId}`);
-  if (!target) throw new Error(`Case not found: ${targetId}`);
+  return withLedgerMutation(async () => {
+    const records = await readCasefile();
+    const source = records.find((r) => r.id === sourceId);
+    const target = records.find((r) => r.id === targetId);
+    if (!source) throw new Error(`Case not found: ${sourceId}`);
+    if (!target) throw new Error(`Case not found: ${targetId}`);
 
-  const now = nowIso();
-  source.linkedCaseIds = source.linkedCaseIds.filter((lid) => lid !== targetId);
-  target.linkedCaseIds = target.linkedCaseIds.filter((lid) => lid !== sourceId);
-  source.updatedAt = now;
-  target.updatedAt = now;
+    const now = nowIso();
+    source.linkedCaseIds = source.linkedCaseIds.filter((lid) => lid !== targetId);
+    target.linkedCaseIds = target.linkedCaseIds.filter((lid) => lid !== sourceId);
+    source.updatedAt = now;
+    target.updatedAt = now;
 
-  await writeCasefile(records);
-  return { source, target };
+    await writeCasefile(records);
+    return { source, target };
+  });
 }
 
 // ── Search (field-scoped) ────────────────────────────────────────────

@@ -56,16 +56,24 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 
 ## Context Injection
 
-On each turn, the extension injects a `<casefile_context>` block into the system prompt showing active cases (excluding killed/reported). This keeps the LLM aware of the current attack surface without requiring explicit tool calls.
+On each turn, the extension injects a `<casefile_context>` block into the system prompt showing active cases (excluding killed/reported). Case titles and next steps are sanitized and truncated before injection, and the prompt marks them as untrusted data.
 
 ## Storage
 
-Cases are persisted as JSONL at `~/.pi/casefile/casefile.jsonl`. Each line is a complete JSON record. Features:
+By default, cases are stored per project at `.pi/casefile.jsonl` under the detected workspace root. This prevents old bounty cases from leaking into unrelated directories.
 
-- **Append-based adds** — new cases appended without rewriting the file
-- **Append-based updates** — updated records appended, deduped on read (last write wins)
-- **Atomic link/unlink** — both directions written in a single pass
-- **Dedup on read** — duplicate IDs resolved to the latest version
+Environment overrides:
+
+- `PI_CASEFILE_PATH=/absolute/or/relative/file.jsonl` — force an exact ledger path
+- `PI_CASEFILE_SCOPE=project` — use project-local storage (default)
+- `PI_CASEFILE_SCOPE=global` — use the shared global ledger at `~/.pi/casefile/casefile.jsonl`
+
+Each line is a complete JSON record. Features:
+
+- **Project-scoped storage by default** — separate ledgers across workspaces
+- **Append-based adds/updates** — preserves history, deduped on read (last write wins)
+- **Mutation locking** — serializes writes and reduces concurrent update loss
+- **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
 - **Delete with cleanup** — removes dangling linked IDs from other cases
 
 ## Offensive Security Workflow
