@@ -48,6 +48,8 @@ export type CaseRecord = {
   references?: string[];
   blockers?: string[];
   tags?: string[];
+  /** Explicit assumptions or unknowns to avoid overstating exploitability. */
+  assumptions?: string[];
   linkedCaseIds: string[];
   createdAt: string;
   updatedAt: string;
@@ -70,6 +72,7 @@ export type CaseInput = {
   references?: string[];
   blockers?: string[];
   tags?: string[];
+  assumptions?: string[];
   linkedCaseIds?: string[];
 };
 
@@ -183,6 +186,10 @@ export function getCasefilePath(): string {
   return join(detectWorkspaceRoot(), ".pi", "casefile.jsonl");
 }
 
+export function getCasefileReportDir(): string {
+  return join(dirname(getCasefilePath()), "report");
+}
+
 async function acquireLedgerLock(): Promise<() => Promise<void>> {
   const ledgerPath = getCasefilePath();
   const lockPath = `${ledgerPath}.lock`;
@@ -242,6 +249,19 @@ export function setCasefilePath(path: string | undefined): void {
 
 // ── Normalize ─────────────────────────────────────────────────────────
 
+function validateCase(record: CaseRecord): void {
+  if (!record.title.trim()) throw new Error("Case title cannot be empty");
+  if (record.status === "confirmed" && !record.evidence && !record.poc) {
+    throw new Error("Confirmed cases require evidence or poc");
+  }
+  if (record.status === "blocked" && (record.blockers ?? []).length === 0) {
+    throw new Error("Blocked cases require at least one blocker");
+  }
+  if (record.status === "reported" && !record.poc && !record.remediation && (record.references ?? []).length === 0) {
+    throw new Error("Reported cases require poc, remediation, or references");
+  }
+}
+
 function normalizeCase(
   input: CaseInput,
   existing?: CaseRecord,
@@ -252,7 +272,7 @@ function normalizeCase(
     existing?.id ??
     `case_${stableShortId(`${title}\n${timestamp}\n${randomUUID()}`)}`;
 
-  return {
+  const record = {
     id,
     title,
     status: input.status ?? existing?.status ?? "hypothesis",
@@ -270,12 +290,15 @@ function normalizeCase(
     references: normalizeList(input.references ?? existing?.references),
     blockers: normalizeList(input.blockers ?? existing?.blockers),
     tags: normalizeList(input.tags ?? existing?.tags),
+    assumptions: normalizeList(input.assumptions ?? existing?.assumptions),
     linkedCaseIds: normalizeList(
       input.linkedCaseIds ?? existing?.linkedCaseIds,
     ).filter((lid) => lid !== id),
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
+  validateCase(record);
+  return record;
 }
 
 // ── Read (with dedup — last write wins) ────────────────────────────────
@@ -362,6 +385,7 @@ export async function updateCase(
         references: update.references ?? current.references,
         blockers: update.blockers ?? current.blockers,
         tags: update.tags ?? current.tags,
+        assumptions: update.assumptions ?? current.assumptions,
         linkedCaseIds: update.linkedCaseIds ?? current.linkedCaseIds,
       },
       current,
@@ -469,6 +493,7 @@ function caseHaystack(
   parts.push(...(record.blockers ?? []));
   parts.push(...(record.tags ?? []));
   parts.push(...(record.references ?? []));
+  parts.push(...(record.assumptions ?? []));
   parts.push(...(record.linkedCaseIds ?? []));
   return parts.filter(Boolean).join("\n").toLowerCase();
 }
@@ -566,10 +591,56 @@ export function formatCaseDetail(record: CaseRecord): string {
     lines.push(`References:  ${record.references.join(", ")}`);
   if (record.blockers?.length)
     lines.push(`Blockers:    ${record.blockers.join(", ")}`);
+  if (record.assumptions?.length)
+    lines.push(`Assumptions: ${record.assumptions.join(", ")}`);
   if (record.tags?.length) lines.push(`Tags:        ${record.tags.join(", ")}`);
   if (record.linkedCaseIds.length)
     lines.push(`Linked:      ${record.linkedCaseIds.join(", ")}`);
   lines.push(`Created:     ${record.createdAt}`);
   lines.push(`Updated:     ${record.updatedAt}`);
   return lines.join("\n");
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 70) || "case";
+}
+
+function mdSection(title: string, body?: string): string {
+  return `## ${title}\n\n${body?.trim() || "Not recorded."}\n`;
+}
+
+export async function writeCaseReport(id: string): Promise<{ path: string; record: CaseRecord }> {
+  const records = await readCasefile();
+  const record = records.find((r) => r.id === id);
+  if (!record) throw new Error(`Case not found: ${id}`);
+
+  const reportDir = getCasefileReportDir();
+  await mkdir(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `${slugify(record.title)}-${record.id}.md`);
+  const references = record.references?.length ? record.references.map((r) => `- ${r}`).join("\n") : undefined;
+  const assumptions = record.assumptions?.length ? record.assumptions.map((a) => `- ${a}`).join("\n") : undefined;
+  const body = [
+    `# ${record.title}`,
+    `**Severity:** ${record.severity ?? "Not assessed"}`,
+    `**Status:** ${record.status}`,
+    `**Confidence:** ${record.confidence}`,
+    record.priority ? `**Priority:** ${record.priority}` : undefined,
+    record.target ? `**Target:** ${record.target}` : undefined,
+    record.endpoint ? `**Endpoint:** ${record.endpoint}` : undefined,
+    record.bugClass ? `**Bug class:** ${record.bugClass}` : undefined,
+    "",
+    mdSection("Summary", record.impact),
+    mdSection("Steps to Reproduce / Evidence", record.evidence),
+    mdSection("Proof of Concept", record.poc),
+    mdSection("Impact", record.impact),
+    mdSection("Remediation", record.remediation),
+    mdSection("Assumptions and Uncertainty", assumptions),
+    mdSection("References", references),
+  ].filter(Boolean).join("\n");
+  await writeFile(reportPath, body, "utf8");
+  return { path: reportPath, record };
 }

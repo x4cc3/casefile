@@ -27,6 +27,7 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 | **CaseSearch** | Full-text search across cases, optionally field-scoped |
 | **CaseLink** | Bidirectionally link two cases (exploit chains) |
 | **CaseUnlink** | Remove a link between two cases |
+| **CaseReport** | Generate a markdown report from a case |
 
 ## Case Fields
 
@@ -48,6 +49,7 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 | `references` | string[] | External URLs, CVEs |
 | `blockers` | string[] | Current blockers |
 | `tags` | string[] | Tags for filtering |
+| `assumptions` | string[] | Explicit assumptions, unknowns, or uncertainty notes |
 | `linked_case_ids` | string[] | Related case IDs |
 
 ## Commands
@@ -74,7 +76,9 @@ Each line is a complete JSON record. Features:
 - **Append-based adds/updates** — preserves history, deduped on read (last write wins)
 - **Mutation locking** — serializes writes and reduces concurrent update loss
 - **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
-- **Delete with cleanup** — removes dangling linked IDs from other cases
+- **Dead-end memory** — use `CaseUpdate` with `status: killed` for duplicates, disproven leads, or cases that should not be pursued again
+- **Evidence guardrails** — confirmed, blocked, and reported cases require supporting fields
+- **Report export** — `CaseReport` writes markdown under `.pi/report/` next to the project ledger
 
 ## Offensive Security Workflow
 
@@ -82,5 +86,5 @@ Each line is a complete JSON record. Features:
 2. **Investigate** — `CaseUpdate` to `status: investigating`, add `evidence`
 3. **Confirm** — `CaseUpdate` to `status: confirmed`, set `severity`, write `poc`
 4. **Chain** — `CaseLink` to connect primitives to escalations
-5. **Report** — `CaseUpdate` to `status: reported`, add `remediation` and `references`
+5. **Report** — `CaseReport` to draft markdown, then `CaseUpdate` to `status: reported`, add `remediation` and `references`
 6. **Kill** — `CaseUpdate` to `status: killed` for dead ends

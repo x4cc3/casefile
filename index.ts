@@ -1,7 +1,7 @@
 /**
  * Casefile — offensive security case tracker for pi.
  *
- * Tools: CaseAdd, CaseUpdate, CaseGet, CaseList, CaseSearch, CaseLink, CaseUnlink
+ * Tools: CaseAdd, CaseUpdate, CaseGet, CaseList, CaseSearch, CaseLink, CaseUnlink, CaseReport
  * Command: /casefile — interactive dashboard
  * Event: before_agent_start — injects case summary context into the system prompt
  */
@@ -19,7 +19,6 @@ import {
   type CasePriority,
   addCase,
   updateCase,
-  deleteCase,
   searchCases,
   countCases,
   linkCases,
@@ -29,6 +28,7 @@ import {
   formatCaseDetail,
   getCasefilePath,
   readCasefile,
+  writeCaseReport,
 } from "./ledger.js";
 
 // ── Schemas ───────────────────────────────────────────────────────────
@@ -80,6 +80,7 @@ const CommonFields = {
   references: Type.Optional(Type.Array(Type.String(), { description: "External URLs, CVEs" })),
   blockers: Type.Optional(Type.Array(Type.String(), { description: "Current blockers" })),
   tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for filtering" })),
+  assumptions: Type.Optional(Type.Array(Type.String(), { description: "Explicit assumptions, unknowns, or uncertainty notes" })),
   linked_case_ids: Type.Optional(Type.Array(Type.String(), { description: "Related case IDs" })),
 };
 
@@ -164,6 +165,13 @@ const UnlinkSchema = Type.Object(
   {
     source_id: Type.String({ description: "First case ID" }),
     target_id: Type.String({ description: "Second case ID to unlink" }),
+  },
+  { additionalProperties: false },
+);
+
+const ReportSchema = Type.Object(
+  {
+    id: Type.String({ description: "Case ID to turn into a markdown report" }),
   },
   { additionalProperties: false },
 );
@@ -355,6 +363,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
         references: params.references,
         blockers: params.blockers,
         tags: params.tags,
+        assumptions: params.assumptions,
         linkedCaseIds: params.linked_case_ids,
       });
       return {
@@ -423,6 +432,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
         references: params.references,
         blockers: params.blockers,
         tags: params.tags,
+        assumptions: params.assumptions,
         linkedCaseIds: params.linked_case_ids,
       });
       return {
@@ -705,6 +715,37 @@ export default function casefileExtension(pi: ExtensionAPI) {
     },
   });
 
+  // ── Tool: CaseReport ──
+
+  pi.registerTool({
+    name: "CaseReport",
+    label: "Write Case Report",
+    description: "Generate a markdown report from a case under the project casefile report directory.",
+    promptSnippet: "Generate a bounty-style markdown report from a case",
+    parameters: ReportSchema,
+
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      const { path, record } = await writeCaseReport(params.id);
+      return {
+        content: [{ type: "text", text: `Report written: ${path}\n${formatCase(record)}` }],
+        details: { path, record },
+      };
+    },
+
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("CaseReport ")) + theme.fg("dim", args.id),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, _options, theme) {
+      const details = result.details as { path?: string } | undefined;
+      return new Text(theme.fg("success", "✓ Report ") + theme.fg("muted", details?.path ?? "written"), 0, 0);
+    },
+  });
+
   // ── Command: /casefile ──
 
   pi.registerCommand("casefile", {
@@ -759,7 +800,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
   // ── Event: Update status bar on case tool results ──
 
   pi.on("tool_result", async (event, ctx) => {
-    const caseTools = ["CaseAdd", "CaseUpdate", "CaseLink", "CaseUnlink"];
+    const caseTools = ["CaseAdd", "CaseUpdate", "CaseLink", "CaseUnlink", "CaseReport"];
     if (
       typeof event.toolName === "string" &&
       caseTools.includes(event.toolName)
