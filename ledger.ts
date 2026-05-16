@@ -80,6 +80,12 @@ export type CaseUpdate = Partial<Omit<CaseInput, "linkedCaseIds">> & {
   linkedCaseIds?: string[];
 };
 
+export type CaseUpdateResult = {
+  record: CaseRecord;
+  changed: boolean;
+  reason?: string;
+};
+
 export type CaseSearchOptions = {
   query?: string;
   field?: "title" | "evidence" | "impact" | "target" | "endpoint" | "bugClass";
@@ -139,6 +145,53 @@ function normalizeText(value: string | undefined): string | undefined {
 
 function stableShortId(input: string): string {
   return createHash("sha1").update(input).digest("hex").slice(0, 10);
+}
+
+const MATERIAL_RECORD_FIELDS = [
+  "title",
+  "status",
+  "confidence",
+  "severity",
+  "priority",
+  "target",
+  "endpoint",
+  "bugClass",
+  "evidence",
+  "impact",
+  "nextStep",
+  "poc",
+  "remediation",
+  "references",
+  "blockers",
+  "tags",
+  "assumptions",
+  "linkedCaseIds",
+] as const satisfies readonly (keyof CaseRecord)[];
+
+function sameStringList(left: string[] | undefined, right: string[] | undefined): boolean {
+  const a = normalizeList(left).sort();
+  const b = normalizeList(right).sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function casesMateriallyEqual(left: CaseRecord, right: CaseRecord): boolean {
+  for (const field of MATERIAL_RECORD_FIELDS) {
+    const a = left[field];
+    const b = right[field];
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!sameStringList(a as string[] | undefined, b as string[] | undefined)) return false;
+      continue;
+    }
+    if ((a ?? undefined) !== (b ?? undefined)) return false;
+  }
+  return true;
+}
+
+function noChangeReason(current: CaseRecord, update: CaseUpdate): string {
+  if (update.status && update.status === current.status) {
+    return `Case is already ${current.status}; no material fields changed.`;
+  }
+  return "No material fields changed.";
 }
 
 // ── Ledger Path ──────────────────────────────────────────────────────
@@ -357,10 +410,10 @@ export async function addCase(input: CaseInput): Promise<CaseRecord> {
 
 // ── Update (append-based — dedup on read picks up latest) ────────────
 
-export async function updateCase(
+export async function updateCaseResult(
   id: string,
   update: CaseUpdate,
-): Promise<CaseRecord> {
+): Promise<CaseUpdateResult> {
   return withLedgerMutation(async () => {
     const records = await readCasefile();
     const current = records.find((r) => r.id === id);
@@ -390,12 +443,25 @@ export async function updateCase(
       },
       current,
     );
+
+    if (casesMateriallyEqual(current, next)) {
+      return { record: current, changed: false, reason: noChangeReason(current, update) };
+    }
+
     // Append updated record — dedup on read picks up the latest version
     const ledgerPath = getCasefilePath();
     await mkdir(dirname(ledgerPath), { recursive: true });
     await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
-    return next;
+    return { record: next, changed: true };
   });
+}
+
+export async function updateCase(
+  id: string,
+  update: CaseUpdate,
+): Promise<CaseRecord> {
+  const result = await updateCaseResult(id, update);
+  return result.record;
 }
 
 // ── Delete (full rewrite — removes record + cleans dangling refs) ────

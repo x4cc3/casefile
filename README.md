@@ -93,6 +93,7 @@ Each line is a complete JSON record. Features:
 - **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
 - **Dead-end memory** — use `CaseUpdate` with `status: killed` for duplicates, disproven leads, or cases that should not be pursued again
 - **Evidence guardrails** — confirmed, blocked, and reported cases require supporting fields
+- **Redundant update guard** — repeated `CaseUpdate` calls that only restate an unchanged status (including already-confirmed cases) are no-ops
 - **Report export** — `CaseReport` writes markdown under `.pi/report/` next to the project ledger
 
 ## Offensive Security Workflow
