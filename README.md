@@ -5,7 +5,14 @@ Track durable security cases during bug bounties, CTFs, and security audits. Eac
 ## Install
 
 ```bash
-pi install npm:pi-casefile
+pi install npm:@x4cc3/pi-casefile
+```
+
+This package is published through GitHub Packages. Configure npm access first:
+
+```ini
+@x4cc3:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
 ```
 
 Or from source:

@@ -1,10 +1,17 @@
 {
-  "name": "pi-casefile",
+  "name": "@x4cc3/pi-casefile",
   "version": "1.1.0",
   "description": "Offensive security case tracker for pi — bug bounties, CTFs, security audits",
   "keywords": [
     "pi-package"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/x4cc3/casefile.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "main": "index.ts",
   "pi": {
     "extensions": [
