@@ -56,6 +56,7 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 | `target` | string | Target asset, host, repo, or scope |
 | `endpoint` | string | Route, file, or object path |
 | `bug_class` | string | Bug class (SSRF, IDOR, XSS, etc.) |
+| `summary` | string | Short report summary |
 | `evidence` | string | Observed evidence or reproduction steps |
 | `impact` | string | Security impact or chain value |
 | `next_step` | string | Next validation or exploit step |
@@ -92,7 +93,7 @@ Each line is a complete JSON record. Features:
 - **Mutation locking** — serializes writes and reduces concurrent update loss
 - **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
 - **Dead-end memory** — use `CaseUpdate` with `status: killed` for duplicates, disproven leads, or cases that should not be pursued again
-- **Evidence guardrails** — confirmed, blocked, and reported cases require supporting fields
+- **Evidence guardrails** — confirmed, blocked, killed, and reported cases require supporting fields
 - **Redundant update guard** — repeated `CaseUpdate` calls that only restate an unchanged status (including already-confirmed cases) are no-ops
 - **Report export** — `CaseReport` writes markdown under `.pi/report/` next to the project ledger
 
@@ -103,4 +104,4 @@ Each line is a complete JSON record. Features:
 3. **Confirm** — `CaseUpdate` to `status: confirmed`, set `severity`, write `poc`
 4. **Chain** — `CaseLink` to connect primitives to escalations
 5. **Report** — `CaseReport` to draft markdown, then `CaseUpdate` to `status: reported`, add `remediation` and `references`
-6. **Kill** — `CaseUpdate` to `status: killed` for dead ends
+6. **Kill** — `CaseUpdate` to `status: killed` for dead ends, duplicates, or disproven leads; include `evidence`, `blockers`, or `assumptions` explaining why

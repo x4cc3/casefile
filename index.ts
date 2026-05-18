@@ -72,6 +72,7 @@ const CommonFields = {
   target: Type.Optional(Type.String({ description: "Target asset, host, repo, or scope" })),
   endpoint: Type.Optional(Type.String({ description: "Endpoint, route, file, or object" })),
   bug_class: Type.Optional(Type.String({ description: "Bug class or root cause category" })),
+  summary: Type.Optional(Type.String({ description: "Short report summary" })),
   evidence: Type.Optional(Type.String({ description: "Observed evidence or repro notes" })),
   impact: Type.Optional(Type.String({ description: "Security impact or chain value" })),
   next_step: Type.Optional(Type.String({ description: "Next validation or exploit step" })),
@@ -135,13 +136,14 @@ const SearchSchema = Type.Object(
   {
     query: Type.String({ description: "Text to search across cases" }),
     field: Type.Optional(
-      StringEnum(["title", "evidence", "impact", "target", "endpoint", "bugClass"] as const, {
+      StringEnum(["title", "summary", "evidence", "impact", "target", "endpoint", "bugClass"] as const, {
         description: "Restrict search to a specific field",
       }),
     ),
     status: Type.Optional(CaseStatusSchema),
     confidence: Type.Optional(CaseConfidenceSchema),
     severity: Type.Optional(CaseSeveritySchema),
+    priority: Type.Optional(CasePrioritySchema),
     tag: Type.Optional(Type.String()),
     limit: Type.Optional(Type.Number()),
     offset: Type.Optional(Type.Number()),
@@ -356,6 +358,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
         target: params.target,
         endpoint: params.endpoint,
         bugClass: params.bug_class,
+        summary: params.summary,
         evidence: params.evidence,
         impact: params.impact,
         nextStep: params.next_step,
@@ -426,6 +429,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
         target: params.target,
         endpoint: params.endpoint,
         bugClass: params.bug_class,
+        summary: params.summary,
         evidence: params.evidence,
         impact: params.impact,
         nextStep: params.next_step,
@@ -589,6 +593,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
         query: params.query,
         field: params.field as
           | "title"
+          | "summary"
           | "evidence"
           | "impact"
           | "target"
@@ -598,6 +603,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
         status: params.status as CaseStatus | undefined,
         confidence: params.confidence as CaseConfidence | undefined,
         severity: params.severity as CaseSeverity | undefined,
+        priority: params.priority as CasePriority | undefined,
         tag: params.tag,
         limit: params.limit,
         offset: params.offset,

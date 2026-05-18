@@ -40,6 +40,7 @@ export type CaseRecord = {
   target?: string;
   endpoint?: string;
   bugClass?: string;
+  summary?: string;
   evidence?: string;
   impact?: string;
   nextStep?: string;
@@ -64,6 +65,7 @@ export type CaseInput = {
   target?: string;
   endpoint?: string;
   bugClass?: string;
+  summary?: string;
   evidence?: string;
   impact?: string;
   nextStep?: string;
@@ -88,7 +90,7 @@ export type CaseUpdateResult = {
 
 export type CaseSearchOptions = {
   query?: string;
-  field?: "title" | "evidence" | "impact" | "target" | "endpoint" | "bugClass";
+  field?: "title" | "summary" | "evidence" | "impact" | "target" | "endpoint" | "bugClass";
   status?: CaseStatus;
   confidence?: CaseConfidence;
   severity?: CaseSeverity;
@@ -119,6 +121,7 @@ const ALL_TEXT_FIELDS: (keyof CaseRecord)[] = [
   "target",
   "endpoint",
   "bugClass",
+  "summary",
   "evidence",
   "impact",
   "nextStep",
@@ -143,6 +146,26 @@ function normalizeText(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
+function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function hasDefined<T extends object>(value: T, key: keyof T): boolean {
+  return hasOwn(value, key) && value[key] !== undefined;
+}
+
+function normalizeOptionalText(
+  input: CaseInput,
+  field: keyof Pick<
+    CaseInput,
+    "target" | "endpoint" | "bugClass" | "summary" | "evidence" | "impact" | "nextStep" | "poc" | "remediation"
+  >,
+  existing?: CaseRecord,
+): string | undefined {
+  if (hasOwn(input, field)) return normalizeText(input[field]);
+  return existing?.[field];
+}
+
 function stableShortId(input: string): string {
   return createHash("sha1").update(input).digest("hex").slice(0, 10);
 }
@@ -156,6 +179,7 @@ const MATERIAL_RECORD_FIELDS = [
   "target",
   "endpoint",
   "bugClass",
+  "summary",
   "evidence",
   "impact",
   "nextStep",
@@ -310,6 +334,15 @@ function validateCase(record: CaseRecord): void {
   if (record.status === "blocked" && (record.blockers ?? []).length === 0) {
     throw new Error("Blocked cases require at least one blocker");
   }
+  if (
+    record.status === "killed" &&
+    !record.evidence &&
+    !record.nextStep &&
+    (record.blockers ?? []).length === 0 &&
+    (record.assumptions ?? []).length === 0
+  ) {
+    throw new Error("Killed cases require evidence, next step, blockers, or assumptions explaining why");
+  }
   if (record.status === "reported" && !record.poc && !record.remediation && (record.references ?? []).length === 0) {
     throw new Error("Reported cases require poc, remediation, or references");
   }
@@ -320,7 +353,7 @@ function normalizeCase(
   existing?: CaseRecord,
 ): CaseRecord {
   const timestamp = nowIso();
-  const title = input.title.trim();
+  const title = (hasOwn(input, "title") ? input.title : existing?.title)?.trim() ?? "";
   const id =
     existing?.id ??
     `case_${stableShortId(`${title}\n${timestamp}\n${randomUUID()}`)}`;
@@ -332,14 +365,15 @@ function normalizeCase(
     confidence: input.confidence ?? existing?.confidence ?? "low",
     severity: input.severity ?? existing?.severity,
     priority: input.priority ?? existing?.priority,
-    target: normalizeText(input.target) ?? existing?.target,
-    endpoint: normalizeText(input.endpoint) ?? existing?.endpoint,
-    bugClass: normalizeText(input.bugClass) ?? existing?.bugClass,
-    evidence: normalizeText(input.evidence) ?? existing?.evidence,
-    impact: normalizeText(input.impact) ?? existing?.impact,
-    nextStep: normalizeText(input.nextStep) ?? existing?.nextStep,
-    poc: normalizeText(input.poc) ?? existing?.poc,
-    remediation: normalizeText(input.remediation) ?? existing?.remediation,
+    target: normalizeOptionalText(input, "target", existing),
+    endpoint: normalizeOptionalText(input, "endpoint", existing),
+    bugClass: normalizeOptionalText(input, "bugClass", existing),
+    summary: normalizeOptionalText(input, "summary", existing),
+    evidence: normalizeOptionalText(input, "evidence", existing),
+    impact: normalizeOptionalText(input, "impact", existing),
+    nextStep: normalizeOptionalText(input, "nextStep", existing),
+    poc: normalizeOptionalText(input, "poc", existing),
+    remediation: normalizeOptionalText(input, "remediation", existing),
     references: normalizeList(input.references ?? existing?.references),
     blockers: normalizeList(input.blockers ?? existing?.blockers),
     tags: normalizeList(input.tags ?? existing?.tags),
@@ -376,12 +410,13 @@ export async function readCasefile(): Promise<CaseRecord[]> {
           records.push(parsed);
         }
       } catch {
-        // Skip corrupt lines
+        throw new Error(`Invalid casefile JSON at line ${records.length + 1} in ${getCasefilePath()}`);
       }
     }
     return records;
-  } catch {
-    return [];
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
   }
 }
 
@@ -422,19 +457,20 @@ export async function updateCaseResult(
     }
     const next = normalizeCase(
       {
-        title: update.title ?? current.title,
+        ...(hasDefined(update, "title") ? { title: update.title } : {}),
         status: update.status ?? current.status,
         confidence: update.confidence ?? current.confidence,
         severity: update.severity ?? current.severity,
         priority: update.priority ?? current.priority,
-        target: update.target ?? current.target,
-        endpoint: update.endpoint ?? current.endpoint,
-        bugClass: update.bugClass ?? current.bugClass,
-        evidence: update.evidence ?? current.evidence,
-        impact: update.impact ?? current.impact,
-        nextStep: update.nextStep ?? current.nextStep,
-        poc: update.poc ?? current.poc,
-        remediation: update.remediation ?? current.remediation,
+        ...(hasDefined(update, "target") ? { target: update.target } : {}),
+        ...(hasDefined(update, "endpoint") ? { endpoint: update.endpoint } : {}),
+        ...(hasDefined(update, "bugClass") ? { bugClass: update.bugClass } : {}),
+        ...(hasDefined(update, "summary") ? { summary: update.summary } : {}),
+        ...(hasDefined(update, "evidence") ? { evidence: update.evidence } : {}),
+        ...(hasDefined(update, "impact") ? { impact: update.impact } : {}),
+        ...(hasDefined(update, "nextStep") ? { nextStep: update.nextStep } : {}),
+        ...(hasDefined(update, "poc") ? { poc: update.poc } : {}),
+        ...(hasDefined(update, "remediation") ? { remediation: update.remediation } : {}),
         references: update.references ?? current.references,
         blockers: update.blockers ?? current.blockers,
         tags: update.tags ?? current.tags,
@@ -620,6 +656,7 @@ export function formatCase(record: CaseRecord): string {
     record.priority ? `priority=${record.priority}` : undefined,
     record.severity ? `severity=${record.severity}` : undefined,
     record.bugClass ? `class=${record.bugClass}` : undefined,
+    record.summary ? `summary=${record.summary}` : undefined,
     record.endpoint ? `endpoint=${record.endpoint}` : undefined,
     record.target ? `target=${record.target}` : undefined,
     record.tags?.length ? `tags=${record.tags.join(",")}` : undefined,
@@ -648,6 +685,7 @@ export function formatCaseDetail(record: CaseRecord): string {
   if (record.target) lines.push(`Target:      ${record.target}`);
   if (record.endpoint) lines.push(`Endpoint:    ${record.endpoint}`);
   if (record.bugClass) lines.push(`Bug class:   ${record.bugClass}`);
+  if (record.summary) lines.push(`Summary:     ${record.summary}`);
   if (record.evidence) lines.push(`Evidence:    ${record.evidence}`);
   if (record.impact) lines.push(`Impact:      ${record.impact}`);
   if (record.poc) lines.push(`PoC:         ${record.poc}`);
@@ -699,7 +737,7 @@ export async function writeCaseReport(id: string): Promise<{ path: string; recor
     record.endpoint ? `**Endpoint:** ${record.endpoint}` : undefined,
     record.bugClass ? `**Bug class:** ${record.bugClass}` : undefined,
     "",
-    mdSection("Summary", record.impact),
+    mdSection("Summary", record.summary),
     mdSection("Steps to Reproduce / Evidence", record.evidence),
     mdSection("Proof of Concept", record.poc),
     mdSection("Impact", record.impact),
