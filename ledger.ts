@@ -328,8 +328,8 @@ export function setCasefilePath(path: string | undefined): void {
 
 function validateCase(record: CaseRecord): void {
   if (!record.title.trim()) throw new Error("Case title cannot be empty");
-  if (record.status === "confirmed" && !record.evidence && !record.poc) {
-    throw new Error("Confirmed cases require evidence or poc");
+  if (record.status === "confirmed" && (!record.evidence || !record.poc)) {
+    throw new Error("Confirmed cases require both evidence and poc");
   }
   if (record.status === "blocked" && (record.blockers ?? []).length === 0) {
     throw new Error("Blocked cases require at least one blocker");
@@ -345,6 +345,12 @@ function validateCase(record: CaseRecord): void {
   }
   if (record.status === "reported" && !record.poc && !record.remediation && (record.references ?? []).length === 0) {
     throw new Error("Reported cases require poc, remediation, or references");
+  }
+}
+
+function validateNewCaseInput(input: CaseInput): void {
+  if (input.status === "confirmed" || input.status === "reported") {
+    throw new Error("New cases must start as hypothesis or investigating; promote with CaseUpdate after validation");
   }
 }
 
@@ -435,6 +441,7 @@ async function writeCasefile(records: CaseRecord[]): Promise<void> {
 
 export async function addCase(input: CaseInput): Promise<CaseRecord> {
   return withLedgerMutation(async () => {
+    validateNewCaseInput(input);
     const record = normalizeCase(input);
     const ledgerPath = getCasefilePath();
     await mkdir(dirname(ledgerPath), { recursive: true });

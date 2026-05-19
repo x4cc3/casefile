@@ -35,7 +35,7 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 
 | Tool | Description |
 |------|-------------|
-| **CaseAdd** | Open a new case (hypothesis, evidence, confirmed vulnerability, etc.) |
+| **CaseAdd** | Open a new hypothesis or investigation case |
 | **CaseUpdate** | Update status, evidence, confidence, severity, next steps |
 | **CaseGet** | Full details of a single case by ID |
 | **CaseList** | Browse cases with status/severity/priority/tag filters + pagination |
@@ -93,7 +93,8 @@ Each line is a complete JSON record. Features:
 - **Mutation locking** — serializes writes and reduces concurrent update loss
 - **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
 - **Dead-end memory** — use `CaseUpdate` with `status: killed` for duplicates, disproven leads, or cases that should not be pursued again
-- **Evidence guardrails** — confirmed, blocked, killed, and reported cases require supporting fields
+- **Evidence guardrails** — confirmed cases require both observed evidence and a PoC/repro note; blocked, killed, and reported cases require supporting fields
+- **Promotion guard** — new cases cannot be opened as confirmed or reported; use `CaseUpdate` after validation
 - **Redundant update guard** — repeated `CaseUpdate` calls that only restate an unchanged status (including already-confirmed cases) are no-ops
 - **Report export** — `CaseReport` writes markdown under `.pi/report/` next to the project ledger
 

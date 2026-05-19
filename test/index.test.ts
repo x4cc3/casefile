@@ -197,10 +197,14 @@ describe("casefile extension", () => {
       status: "killed",
       assumptions: ["Duplicate lead with no new evidence"],
     });
-    await executeTool(pi, "CaseAdd", {
+    const reported = await executeTool(pi, "CaseAdd", {
       title: "Already reported",
-      status: "reported",
+      status: "investigating",
       remediation: "Patch shipped",
+    });
+    await executeTool(pi, "CaseUpdate", {
+      id: reported.details.record.id,
+      status: "reported",
     });
 
     const handler = pi.events.get("before_agent_start")?.[0];
@@ -221,10 +225,15 @@ describe("casefile extension", () => {
     const pi = createFakePi();
     casefileExtension(pi as any);
 
-    await executeTool(pi, "CaseAdd", {
+    const storedXss = await executeTool(pi, "CaseAdd", {
       title: "Stored XSS",
-      status: "confirmed",
+      status: "investigating",
       evidence: "Payload renders in notes",
+    });
+    await executeTool(pi, "CaseUpdate", {
+      id: storedXss.details.record.id,
+      status: "confirmed",
+      poc: "Render a note containing <img src=x onerror=alert(1)> and observe execution",
     });
 
     const notifications: string[] = [];

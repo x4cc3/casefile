@@ -107,7 +107,24 @@ describe("casefile ledger", () => {
   test("enforces workflow validation for confirmed, blocked, killed, and reported cases", async () => {
     await expect(addCase({ title: "Empty confirmed", status: "confirmed" }))
       .rejects
-      .toThrow("Confirmed cases require evidence or poc");
+      .toThrow("New cases must start as hypothesis or investigating");
+
+    await expect(addCase({
+      title: "Instant confirmed",
+      status: "confirmed",
+      evidence: "Single observation",
+    }))
+      .rejects
+      .toThrow("New cases must start as hypothesis or investigating");
+
+    const weakLead = await addCase({
+      title: "Code review only SSRF",
+      status: "investigating",
+      evidence: "URL is fetched after hostname validation",
+    });
+    await expect(updateCaseResult(weakLead.id, { status: "confirmed" }))
+      .rejects
+      .toThrow("Confirmed cases require both evidence and poc");
 
     await expect(addCase({ title: "Blocked without blocker", status: "blocked" }))
       .rejects
@@ -128,7 +145,7 @@ describe("casefile ledger", () => {
 
     await expect(addCase({ title: "Reported without report data", status: "reported" }))
       .rejects
-      .toThrow("Reported cases require poc, remediation, or references");
+      .toThrow("New cases must start as hypothesis or investigating");
   });
 
   test("links and unlinks cases bidirectionally", async () => {
@@ -165,14 +182,15 @@ describe("casefile ledger", () => {
       evidence: "Schema exposes adminMutation",
       tags: ["graphql"],
     });
-    await addCase({
+    const storedXss = await addCase({
       title: "Stored XSS",
-      status: "confirmed",
+      status: "investigating",
       severity: "high",
       evidence: "Payload persists in case notes",
       poc: "<img src=x onerror=alert(1)>",
       tags: ["xss"],
     });
+    await updateCaseResult(storedXss.id, { status: "confirmed" });
 
     const graphql = await searchCases({ query: "adminMutation", field: "evidence" });
     expect(graphql.total).toBe(1);
@@ -190,7 +208,7 @@ describe("casefile ledger", () => {
   test("writes a markdown report for a case", async () => {
     const record = await addCase({
       title: "Account takeover through reset token reuse",
-      status: "confirmed",
+      status: "investigating",
       confidence: "high",
       severity: "critical",
       target: "auth.example.test",
@@ -201,6 +219,7 @@ describe("casefile ledger", () => {
       remediation: "Invalidate all outstanding reset tokens after first use",
       references: ["https://example.test/advisory"],
     });
+    await updateCaseResult(record.id, { status: "confirmed" });
 
     const report = await writeCaseReport(record.id);
     expect(report.path).toMatch(/account-takeover-through-reset-token-reuse-case_[a-f0-9]{10}\.md$/);

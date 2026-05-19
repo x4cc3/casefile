@@ -342,8 +342,9 @@ export default function casefileExtension(pi: ExtensionAPI) {
       "Open a new case in the casefile ledger. Track security hypotheses, evidence points, confirmed vulnerabilities, blockers, and exploit chain steps during bug bounties, CTFs, and security audits.",
     promptSnippet: "Record a security finding or hypothesis as a case",
     promptGuidelines: [
-      "Use CaseAdd when you discover or hypothesize a security issue. Even unconfirmed observations should be recorded as hypothesis status — promote them later with CaseUpdate.",
-      "Set status='hypothesis' for unconfirmed observations, 'investigating' when actively testing, 'confirmed' when you have proof, and 'reported' when filed.",
+      "Use CaseAdd when you discover or hypothesize a security issue. New cases must start as status='hypothesis' or status='investigating' — promote them later with CaseUpdate.",
+      "Set status='hypothesis' for unconfirmed observations and 'investigating' when actively testing. Use CaseUpdate, not CaseAdd, to mark proof-backed cases as 'confirmed' or filed cases as 'reported'.",
+      "Do not mark a case confirmed from code review or static reasoning alone. Keep it investigating until there is a real repro, test run, exploit run, or equivalent validation captured in poc.",
       "Always record evidence in the evidence field, impact in the impact field, and next steps in the next_step field. These are critical for chain construction.",
     ],
     parameters: AddSchema,
@@ -415,6 +416,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use CaseUpdate when new evidence, status changes, confidence updates, or blockers change for an existing case.",
       "Promote from 'hypothesis' → 'investigating' when you start actively testing, 'investigating' → 'confirmed' when you have proof.",
+      "Only set status='confirmed' after a real repro, test run, exploit run, or equivalent validation. Put the observation in evidence and the exact proof/repro in poc.",
       "Do not call CaseUpdate solely to restate the current status. If a case is already confirmed, only update it for materially new evidence, impact, PoC, remediation, links, or a real status change such as reported/blocked/killed.",
     ],
     parameters: UpdateSchema,
