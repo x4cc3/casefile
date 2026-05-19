@@ -90,6 +90,7 @@ Each line is a complete JSON record. Features:
 
 - **Project-scoped storage by default** — separate ledgers across workspaces
 - **Append-based adds/updates** — preserves history, deduped on read (last write wins)
+- **Duplicate add guard** — repeated `CaseAdd` calls for the same active title/scope return the existing case instead of appending a duplicate
 - **Mutation locking** — serializes writes and reduces concurrent update loss
 - **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
 - **Dead-end memory** — use `CaseUpdate` with `status: killed` for duplicates, disproven leads, or cases that should not be pursued again

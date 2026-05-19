@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 
 import {
   addCase,
+  addCaseResult,
   linkCases,
   readCasefile,
   searchCases,
@@ -51,6 +52,29 @@ describe("casefile ledger", () => {
       target: "api.example.test",
       summary: "Server fetches attacker-controlled URLs",
     });
+  });
+
+  test("deduplicates active cases with the same title and scope", async () => {
+    const first = await addCaseResult({
+      title: " SSRF candidate ",
+      target: "api.example.test",
+      bugClass: "SSRF",
+      evidence: "Observed URL fetch",
+    });
+    expect(first.created).toBe(true);
+
+    const duplicate = await addCaseResult({
+      title: "ssrf   candidate",
+      target: "api.example.test",
+      bugClass: "ssrf",
+      evidence: "Repeated audit note",
+    });
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.record.id).toBe(first.record.id);
+    expect(duplicate.reason).toContain(first.record.id);
+
+    const raw = await readFile(ledgerPath, "utf8");
+    expect(raw.trim().split("\n")).toHaveLength(1);
   });
 
   test("updates by appending a new version and treats no-op updates as unchanged", async () => {

@@ -88,6 +88,12 @@ export type CaseUpdateResult = {
   reason?: string;
 };
 
+export type CaseAddResult = {
+  record: CaseRecord;
+  created: boolean;
+  reason?: string;
+};
+
 export type CaseSearchOptions = {
   query?: string;
   field?: "title" | "summary" | "evidence" | "impact" | "target" | "endpoint" | "bugClass";
@@ -144,6 +150,10 @@ function normalizeList(values: string[] | undefined): string[] {
 function normalizeText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function normalizeMatchText(value: string | undefined): string {
+  return normalizeText(value)?.toLowerCase().replace(/\s+/g, " ") ?? "";
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
@@ -216,6 +226,25 @@ function noChangeReason(current: CaseRecord, update: CaseUpdate): string {
     return `Case is already ${current.status}; no material fields changed.`;
   }
   return "No material fields changed.";
+}
+
+function scopeFieldMatches(left: string | undefined, right: string | undefined): boolean {
+  const a = normalizeMatchText(left);
+  const b = normalizeMatchText(right);
+  return !a || !b || a === b;
+}
+
+function findDuplicateCase(records: CaseRecord[], candidate: CaseRecord): CaseRecord | undefined {
+  const title = normalizeMatchText(candidate.title);
+  if (!title) return undefined;
+
+  return records.find((record) =>
+    record.status !== "killed" &&
+    normalizeMatchText(record.title) === title &&
+    scopeFieldMatches(record.target, candidate.target) &&
+    scopeFieldMatches(record.endpoint, candidate.endpoint) &&
+    scopeFieldMatches(record.bugClass, candidate.bugClass)
+  );
 }
 
 // ── Ledger Path ──────────────────────────────────────────────────────
@@ -439,15 +468,30 @@ async function writeCasefile(records: CaseRecord[]): Promise<void> {
 
 // ── Add (append-based) ───────────────────────────────────────────────
 
-export async function addCase(input: CaseInput): Promise<CaseRecord> {
+export async function addCaseResult(input: CaseInput): Promise<CaseAddResult> {
   return withLedgerMutation(async () => {
     validateNewCaseInput(input);
     const record = normalizeCase(input);
+    const records = await readCasefile();
+    const duplicate = findDuplicateCase(records, record);
+    if (duplicate) {
+      return {
+        record: duplicate,
+        created: false,
+        reason: `Duplicate case exists: ${duplicate.id}`,
+      };
+    }
+
     const ledgerPath = getCasefilePath();
     await mkdir(dirname(ledgerPath), { recursive: true });
     await appendFile(ledgerPath, `${JSON.stringify(record)}\n`, "utf8");
-    return record;
+    return { record, created: true };
   });
+}
+
+export async function addCase(input: CaseInput): Promise<CaseRecord> {
+  const result = await addCaseResult(input);
+  return result.record;
 }
 
 // ── Update (append-based — dedup on read picks up latest) ────────────

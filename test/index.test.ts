@@ -121,6 +121,7 @@ describe("casefile extension", () => {
       tags: ["idor"],
     });
     const record = added.details.record;
+    expect(added.details.created).toBe(true);
 
     const fetched = await executeTool(pi, "CaseGet", { id: record.id });
     expect(fetched.content[0].text).toContain("Sensitive file disclosure");
@@ -151,6 +152,31 @@ describe("casefile extension", () => {
 
     const report = await executeTool(pi, "CaseReport", { id: record.id });
     expect(report.details.path).toMatch(/sensitive-file-disclosure-case_[a-f0-9]{10}\.md$/);
+  });
+
+  test("returns the existing case when CaseAdd repeats the same title and scope", async () => {
+    const pi = createFakePi();
+    casefileExtension(pi as any);
+
+    const first = await executeTool(pi, "CaseAdd", {
+      title: "Provider metadata injection",
+      target: "packages/ai",
+      bug_class: "validation bypass",
+      evidence: "Initial audit note",
+    });
+    const duplicate = await executeTool(pi, "CaseAdd", {
+      title: " provider metadata   injection ",
+      target: "packages/ai",
+      bug_class: "Validation Bypass",
+      evidence: "Repeated audit note",
+    });
+
+    expect(duplicate.details.created).toBe(false);
+    expect(duplicate.details.record.id).toBe(first.details.record.id);
+    expect(duplicate.content[0].text).toContain("Case already exists");
+
+    const listed = await executeTool(pi, "CaseList", {});
+    expect(listed.details.total).toBe(1);
   });
 
   test("links and unlinks cases through registered tools", async () => {
