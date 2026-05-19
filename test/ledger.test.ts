@@ -7,10 +7,12 @@ import {
   addCase,
   addCaseResult,
   linkCases,
+  linkCasesResult,
   readCasefile,
   searchCases,
   setCasefilePath,
   unlinkCases,
+  unlinkCasesResult,
   updateCaseResult,
   writeCaseReport,
 } from "../ledger.ts";
@@ -186,11 +188,19 @@ describe("casefile ledger", () => {
     expect(linked.source.linkedCaseIds).toEqual([escalation.id]);
     expect(linked.target.linkedCaseIds).toEqual([primitive.id]);
 
+    const duplicateLink = await linkCasesResult(primitive.id, escalation.id);
+    expect(duplicateLink.changed).toBe(false);
+    expect(duplicateLink.reason).toBe("Cases are already linked");
+
     const afterLink = await readCasefile();
     expect(afterLink.find((r) => r.id === primitive.id)?.linkedCaseIds).toEqual([escalation.id]);
     expect(afterLink.find((r) => r.id === escalation.id)?.linkedCaseIds).toEqual([primitive.id]);
 
     await unlinkCases(primitive.id, escalation.id);
+    const duplicateUnlink = await unlinkCasesResult(primitive.id, escalation.id);
+    expect(duplicateUnlink.changed).toBe(false);
+    expect(duplicateUnlink.reason).toBe("Cases are not linked");
+
     const afterUnlink = await readCasefile();
     expect(afterUnlink.find((r) => r.id === primitive.id)?.linkedCaseIds).toEqual([]);
     expect(afterUnlink.find((r) => r.id === escalation.id)?.linkedCaseIds).toEqual([]);
@@ -256,6 +266,18 @@ describe("casefile ledger", () => {
     expect(body).toContain("## Steps to Reproduce / Evidence");
     expect(body).toContain("Reset token remains valid after password change");
     expect(body).toContain("- https://example.test/advisory");
+  });
+
+  test("rejects reports for unconfirmed cases", async () => {
+    const record = await addCase({
+      title: "Needs validation",
+      status: "investigating",
+      evidence: "Static review only",
+    });
+
+    await expect(writeCaseReport(record.id))
+      .rejects
+      .toThrow("Case reports require a confirmed or reported case");
   });
 
   test("returns an empty ledger only when the file does not exist", async () => {

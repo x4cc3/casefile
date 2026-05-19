@@ -97,6 +97,7 @@ Each line is a complete JSON record. Features:
 - **Evidence guardrails** — confirmed cases require both observed evidence and a PoC/repro note; blocked, killed, and reported cases require supporting fields
 - **Promotion guard** — new cases cannot be opened as confirmed or reported; use `CaseUpdate` after validation
 - **Redundant update guard** — repeated `CaseUpdate` calls that only restate an unchanged status (including already-confirmed cases) are no-ops
+- **Link/report guardrails** — repeated link/unlink calls are no-ops, and reports require confirmed or reported cases
 - **Report export** — `CaseReport` writes markdown under `.pi/report/` next to the project ledger
 
 ## Offensive Security Workflow

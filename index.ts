@@ -21,8 +21,8 @@ import {
   updateCaseResult,
   searchCases,
   countCases,
-  linkCases,
-  unlinkCases,
+  linkCasesResult,
+  unlinkCasesResult,
   formatCase,
   formatCases,
   formatCaseDetail,
@@ -662,15 +662,18 @@ export default function casefileExtension(pi: ExtensionAPI) {
     parameters: LinkSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const { source, target } = await linkCases(params.source_id, params.target_id);
+      const result = await linkCasesResult(params.source_id, params.target_id);
+      const { source, target } = result;
       return {
         content: [
           {
             type: "text",
-            text: `Linked:\n  ${formatCase(source)}\n  ↔\n  ${formatCase(target)}`,
+            text: result.changed
+              ? `Linked:\n  ${formatCase(source)}\n  ↔\n  ${formatCase(target)}`
+              : `Link unchanged: ${result.reason ?? "no material change"}\n  ${formatCase(source)}\n  ↔\n  ${formatCase(target)}`,
           },
         ],
-        details: { source, target },
+        details: { source, target, changed: result.changed, reason: result.reason },
       };
     },
 
@@ -685,13 +688,13 @@ export default function casefileExtension(pi: ExtensionAPI) {
 
     renderResult(result, _options, theme) {
       const details = result.details as
-        | { source?: CaseRecord; target?: CaseRecord }
+        | { source?: CaseRecord; target?: CaseRecord; changed?: boolean }
         | undefined;
       if (!details?.source || !details?.target) {
         return new Text("Linked", 0, 0);
       }
       return new Text(
-        theme.fg("success", "✓ Linked ") +
+        theme.fg(details.changed === false ? "warning" : "success", details.changed === false ? "↻ Linked " : "✓ Linked ") +
           theme.fg("accent", details.source.id) +
           " ↔ " +
           theme.fg("accent", details.target.id),
@@ -710,15 +713,18 @@ export default function casefileExtension(pi: ExtensionAPI) {
     parameters: UnlinkSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const { source, target } = await unlinkCases(params.source_id, params.target_id);
+      const result = await unlinkCasesResult(params.source_id, params.target_id);
+      const { source, target } = result;
       return {
         content: [
           {
             type: "text",
-            text: `Unlinked:\n  ${formatCase(source)}\n  ↻\n  ${formatCase(target)}`,
+            text: result.changed
+              ? `Unlinked:\n  ${formatCase(source)}\n  ↻\n  ${formatCase(target)}`
+              : `Unlink unchanged: ${result.reason ?? "no material change"}\n  ${formatCase(source)}\n  ↻\n  ${formatCase(target)}`,
           },
         ],
-        details: { source, target },
+        details: { source, target, changed: result.changed, reason: result.reason },
       };
     },
 
@@ -731,8 +737,9 @@ export default function casefileExtension(pi: ExtensionAPI) {
       );
     },
 
-    renderResult(_result, _options, theme) {
-      return new Text(theme.fg("success", "✓ Unlinked"), 0, 0);
+    renderResult(result, _options, theme) {
+      const details = result.details as { changed?: boolean } | undefined;
+      return new Text(theme.fg(details?.changed === false ? "warning" : "success", details?.changed === false ? "↻ Unlinked" : "✓ Unlinked"), 0, 0);
     },
   });
 
@@ -743,6 +750,9 @@ export default function casefileExtension(pi: ExtensionAPI) {
     label: "Write Case Report",
     description: "Generate a markdown report from a case under the project casefile report directory.",
     promptSnippet: "Generate a bounty-style markdown report from a case",
+    promptGuidelines: [
+      "Use CaseReport only for confirmed or already reported cases. Keep hypotheses and investigating cases in the ledger until proof is captured.",
+    ],
     parameters: ReportSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {

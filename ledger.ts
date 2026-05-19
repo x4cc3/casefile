@@ -94,6 +94,13 @@ export type CaseAddResult = {
   reason?: string;
 };
 
+export type CaseLinkResult = {
+  source: CaseRecord;
+  target: CaseRecord;
+  changed: boolean;
+  reason?: string;
+};
+
 export type CaseSearchOptions = {
   query?: string;
   field?: "title" | "summary" | "evidence" | "impact" | "target" | "endpoint" | "bugClass";
@@ -577,6 +584,14 @@ export async function linkCases(
   sourceId: string,
   targetId: string,
 ): Promise<{ source: CaseRecord; target: CaseRecord }> {
+  const { source, target } = await linkCasesResult(sourceId, targetId);
+  return { source, target };
+}
+
+export async function linkCasesResult(
+  sourceId: string,
+  targetId: string,
+): Promise<CaseLinkResult> {
   return withLedgerMutation(async () => {
     if (sourceId === targetId) {
       throw new Error("Cannot link a case to itself");
@@ -586,6 +601,11 @@ export async function linkCases(
     const target = records.find((r) => r.id === targetId);
     if (!source) throw new Error(`Case not found: ${sourceId}`);
     if (!target) throw new Error(`Case not found: ${targetId}`);
+
+    const alreadyLinked = source.linkedCaseIds.includes(targetId) && target.linkedCaseIds.includes(sourceId);
+    if (alreadyLinked) {
+      return { source, target, changed: false, reason: "Cases are already linked" };
+    }
 
     if (!source.linkedCaseIds.includes(targetId)) {
       source.linkedCaseIds = [...source.linkedCaseIds, targetId];
@@ -598,7 +618,7 @@ export async function linkCases(
     target.updatedAt = now;
 
     await writeCasefile(records);
-    return { source, target };
+    return { source, target, changed: true };
   });
 }
 
@@ -608,12 +628,25 @@ export async function unlinkCases(
   sourceId: string,
   targetId: string,
 ): Promise<{ source: CaseRecord; target: CaseRecord }> {
+  const { source, target } = await unlinkCasesResult(sourceId, targetId);
+  return { source, target };
+}
+
+export async function unlinkCasesResult(
+  sourceId: string,
+  targetId: string,
+): Promise<CaseLinkResult> {
   return withLedgerMutation(async () => {
     const records = await readCasefile();
     const source = records.find((r) => r.id === sourceId);
     const target = records.find((r) => r.id === targetId);
     if (!source) throw new Error(`Case not found: ${sourceId}`);
     if (!target) throw new Error(`Case not found: ${targetId}`);
+
+    const linked = source.linkedCaseIds.includes(targetId) || target.linkedCaseIds.includes(sourceId);
+    if (!linked) {
+      return { source, target, changed: false, reason: "Cases are not linked" };
+    }
 
     const now = nowIso();
     source.linkedCaseIds = source.linkedCaseIds.filter((lid) => lid !== targetId);
@@ -622,7 +655,7 @@ export async function unlinkCases(
     target.updatedAt = now;
 
     await writeCasefile(records);
-    return { source, target };
+    return { source, target, changed: true };
   });
 }
 
@@ -772,6 +805,9 @@ export async function writeCaseReport(id: string): Promise<{ path: string; recor
   const records = await readCasefile();
   const record = records.find((r) => r.id === id);
   if (!record) throw new Error(`Case not found: ${id}`);
+  if (record.status !== "confirmed" && record.status !== "reported") {
+    throw new Error("Case reports require a confirmed or reported case");
+  }
 
   const reportDir = getCasefileReportDir();
   await mkdir(reportDir, { recursive: true });

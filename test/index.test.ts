@@ -199,12 +199,26 @@ describe("casefile extension", () => {
     expect(linked.details.source.linkedCaseIds).toEqual([second.details.record.id]);
     expect(linked.details.target.linkedCaseIds).toEqual([first.details.record.id]);
 
+    const duplicateLink = await executeTool(pi, "CaseLink", {
+      source_id: first.details.record.id,
+      target_id: second.details.record.id,
+    });
+    expect(duplicateLink.details.changed).toBe(false);
+    expect(duplicateLink.content[0].text).toContain("Link unchanged");
+
     const unlinked = await executeTool(pi, "CaseUnlink", {
       source_id: first.details.record.id,
       target_id: second.details.record.id,
     });
     expect(unlinked.details.source.linkedCaseIds).toEqual([]);
     expect(unlinked.details.target.linkedCaseIds).toEqual([]);
+
+    const duplicateUnlink = await executeTool(pi, "CaseUnlink", {
+      source_id: first.details.record.id,
+      target_id: second.details.record.id,
+    });
+    expect(duplicateUnlink.details.changed).toBe(false);
+    expect(duplicateUnlink.content[0].text).toContain("Unlink unchanged");
   });
 
   test("injects only active cases into before_agent_start context", async () => {
