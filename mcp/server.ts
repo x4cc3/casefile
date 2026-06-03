@@ -1,0 +1,387 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import * as z from "zod/v4";
+
+import {
+  type CaseConfidence,
+  type CaseInput,
+  type CasePriority,
+  type CaseSearchOptions,
+  type CaseSeverity,
+  type CaseStatus,
+  addCaseResult,
+  countCases,
+  formatCase,
+  formatCaseDetail,
+  formatCases,
+  getCasefilePath,
+  linkCasesResult,
+  readCasefile,
+  searchCases,
+  unlinkCasesResult,
+  updateCaseResult,
+  writeCaseReport,
+} from "../ledger.js";
+
+type CasefileMcpToolResult = {
+  content: [{ type: "text"; text: string }];
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+};
+
+const STATUS_VALUES = [
+  "hypothesis",
+  "investigating",
+  "confirmed",
+  "blocked",
+  "killed",
+  "reported",
+] as const satisfies readonly CaseStatus[];
+
+const CONFIDENCE_VALUES = ["low", "medium", "high"] as const satisfies readonly CaseConfidence[];
+const SEVERITY_VALUES = ["info", "low", "medium", "high", "critical"] as const satisfies readonly CaseSeverity[];
+const PRIORITY_VALUES = ["P0", "P1", "P2", "P3", "P4"] as const satisfies readonly CasePriority[];
+const SEARCH_FIELD_VALUES = [
+  "title",
+  "summary",
+  "evidence",
+  "impact",
+  "target",
+  "endpoint",
+  "bugClass",
+  "poc",
+] as const satisfies readonly NonNullable<CaseSearchOptions["field"]>[];
+
+const statusSchema = z.enum(STATUS_VALUES);
+const confidenceSchema = z.enum(CONFIDENCE_VALUES);
+const severitySchema = z.enum(SEVERITY_VALUES);
+const prioritySchema = z.enum(PRIORITY_VALUES);
+const searchFieldSchema = z.enum(SEARCH_FIELD_VALUES);
+
+type CaseToolParams = Partial<Omit<CaseInput, "bugClass" | "nextStep">> & {
+  bug_class?: string;
+  next_step?: string;
+};
+
+const commonCaseFields = {
+  status: statusSchema.optional().describe("Case status"),
+  confidence: confidenceSchema.optional().describe("Confidence level"),
+  severity: severitySchema.optional().describe("Security severity"),
+  priority: prioritySchema.optional().describe("Triage priority"),
+  target: z.string().optional().describe("Target asset, host, repo, or scope"),
+  endpoint: z.string().optional().describe("Endpoint, route, file, or object"),
+  bug_class: z.string().optional().describe("Bug class or root cause category"),
+  summary: z.string().optional().describe("Short report summary"),
+  evidence: z.string().optional().describe("Observed evidence or repro notes"),
+  impact: z.string().optional().describe("Security impact or chain value"),
+  next_step: z.string().optional().describe("Next validation or exploit step"),
+  poc: z.string().optional().describe("Proof of concept steps"),
+  remediation: z.string().optional().describe("How to fix it"),
+  references: z.array(z.string()).optional().describe("External URLs, CVEs, or advisories"),
+  blockers: z.array(z.string()).optional().describe("Current blockers"),
+  tags: z.array(z.string()).optional().describe("Tags for filtering"),
+  assumptions: z.array(z.string()).optional().describe("Explicit assumptions, unknowns, or uncertainty notes"),
+};
+
+function textResult(text: string, structuredContent?: Record<string, unknown>): CasefileMcpToolResult {
+  return {
+    content: [{ type: "text" as const, text }],
+    ...(structuredContent === undefined ? {} : { structuredContent }),
+  };
+}
+
+function errorResult(error: unknown): CasefileMcpToolResult {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: `Casefile error: ${message}` }],
+  };
+}
+
+async function runTool(
+  fn: () => Promise<{ text: string; structuredContent?: Record<string, unknown> }>,
+): Promise<CasefileMcpToolResult> {
+  try {
+    const result = await fn();
+    return textResult(result.text, result.structuredContent);
+  } catch (error) {
+    return errorResult(error);
+  }
+}
+
+function caseInputFromParams(params: CaseToolParams): Partial<CaseInput> {
+  return {
+    ...(params.title === undefined ? {} : { title: params.title }),
+    status: params.status,
+    confidence: params.confidence,
+    severity: params.severity,
+    priority: params.priority,
+    target: params.target,
+    endpoint: params.endpoint,
+    bugClass: params.bug_class,
+    summary: params.summary,
+    evidence: params.evidence,
+    impact: params.impact,
+    nextStep: params.next_step,
+    poc: params.poc,
+    remediation: params.remediation,
+    references: params.references,
+    blockers: params.blockers,
+    tags: params.tags,
+    assumptions: params.assumptions,
+  };
+}
+
+export function createCasefileMcpServer(): McpServer {
+  const server = new McpServer({
+    name: "casefile",
+    version: "1.2.0",
+  });
+
+  server.registerTool(
+    "casefile_add",
+    {
+      title: "Add Case",
+      description: "Open a new security case as a hypothesis or investigation. Use updates to promote confirmed, blocked, killed, or reported states.",
+      inputSchema: {
+        title: z.string().describe("Short case title"),
+        ...commonCaseFields,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => runTool(async () => {
+      const result = await addCaseResult({ ...caseInputFromParams(params), title: params.title });
+      const text = result.created
+        ? `Case opened:\n${formatCaseDetail(result.record)}\n\nLedger: ${getCasefilePath()}`
+        : `Case already exists: ${result.reason ?? result.record.id}\n${formatCaseDetail(result.record)}\n\nUse casefile_update only for materially new evidence, PoC, impact, blockers, or status changes.`;
+      return { text, structuredContent: { ...result, ledger_path: getCasefilePath() } };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_update",
+    {
+      title: "Update Case",
+      description: "Update an existing case with materially new evidence, status, confidence, blockers, impact, remediation, or next steps.",
+      inputSchema: {
+        id: z.string().describe("Case ID to update"),
+        title: z.string().optional().describe("Updated case title"),
+        ...commonCaseFields,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => runTool(async () => {
+      const result = await updateCaseResult(params.id, caseInputFromParams(params));
+      const text = result.changed
+        ? `Case updated:\n${formatCaseDetail(result.record)}`
+        : `Case unchanged: ${result.reason ?? "no material fields changed"}\n${formatCaseDetail(result.record)}`;
+      return { text, structuredContent: result };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_get",
+    {
+      title: "Get Case",
+      description: "Get full details of a single case by ID.",
+      inputSchema: {
+        id: z.string().describe("Case ID"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ id }) => runTool(async () => {
+      const records = await readCasefile();
+      const record = records.find((candidate) => candidate.id === id);
+      if (!record) throw new Error(`Case not found: ${id}`);
+      return { text: formatCaseDetail(record), structuredContent: { record } };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_list",
+    {
+      title: "List Cases",
+      description: "List cases with optional status, confidence, severity, priority, tag, and pagination filters.",
+      inputSchema: {
+        status: statusSchema.optional(),
+        confidence: confidenceSchema.optional(),
+        severity: severitySchema.optional(),
+        priority: prioritySchema.optional(),
+        tag: z.string().optional().describe("Filter by tag"),
+        limit: z.number().int().min(1).max(200).optional().describe("Max results, default 50"),
+        offset: z.number().int().min(0).optional().describe("Skip N results for pagination"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => runTool(async () => {
+      const result = await searchCases(params);
+      const offset = params.offset ?? 0;
+      const header = `Showing ${result.cases.length} of ${result.total} cases (offset: ${offset})`;
+      const body = result.cases.length > 0 ? formatCases(result.cases) : "No cases match filters.";
+      return { text: `${header}\n${body}`, structuredContent: { ...result, offset } };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_search",
+    {
+      title: "Search Cases",
+      description: "Full-text search across cases, optionally restricted to title, summary, evidence, impact, target, endpoint, bugClass, or poc.",
+      inputSchema: {
+        query: z.string().describe("Text to search across cases"),
+        field: searchFieldSchema.optional().describe("Restrict search to a specific field"),
+        status: statusSchema.optional(),
+        confidence: confidenceSchema.optional(),
+        severity: severitySchema.optional(),
+        priority: prioritySchema.optional(),
+        tag: z.string().optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+        offset: z.number().int().min(0).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => runTool(async () => {
+      const result = await searchCases(params);
+      const offset = params.offset ?? 0;
+      const header = `Search "${params.query}"${params.field ? ` in ${params.field}` : ""}: ${result.cases.length} of ${result.total} results (offset: ${offset})`;
+      const body = result.cases.length > 0 ? formatCases(result.cases) : "No matching cases.";
+      return { text: `${header}\n${body}`, structuredContent: { ...result, offset } };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_link",
+    {
+      title: "Link Cases",
+      description: "Bidirectionally link two cases into an exploit chain or related investigation trail.",
+      inputSchema: {
+        source_id: z.string().describe("First case ID"),
+        target_id: z.string().describe("Second case ID"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ source_id, target_id }) => runTool(async () => {
+      const result = await linkCasesResult(source_id, target_id);
+      const text = result.changed
+        ? `Linked:\n  ${formatCase(result.source)}\n  <->\n  ${formatCase(result.target)}`
+        : `Link unchanged: ${result.reason ?? "no material change"}\n  ${formatCase(result.source)}\n  <->\n  ${formatCase(result.target)}`;
+      return { text, structuredContent: result };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_unlink",
+    {
+      title: "Unlink Cases",
+      description: "Remove a bidirectional link between two cases.",
+      inputSchema: {
+        source_id: z.string().describe("First case ID"),
+        target_id: z.string().describe("Second case ID"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ source_id, target_id }) => runTool(async () => {
+      const result = await unlinkCasesResult(source_id, target_id);
+      const text = result.changed
+        ? `Unlinked:\n  ${formatCase(result.source)}\n  -/->\n  ${formatCase(result.target)}`
+        : `Unlink unchanged: ${result.reason ?? "no material change"}\n  ${formatCase(result.source)}\n  -/->\n  ${formatCase(result.target)}`;
+      return { text, structuredContent: result };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_report",
+    {
+      title: "Write Case Report",
+      description: "Generate a markdown report from a confirmed or reported case under the casefile report directory.",
+      inputSchema: {
+        id: z.string().describe("Case ID to turn into a markdown report"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ id }) => runTool(async () => {
+      const result = await writeCaseReport(id);
+      return {
+        text: `Report written: ${result.path}\n${formatCase(result.record)}`,
+        structuredContent: result,
+      };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_count",
+    {
+      title: "Count Cases",
+      description: "Return total case count grouped by status and severity.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => runTool(async () => {
+      const result = await countCases();
+      return {
+        text: `Casefile: ${result.total} total | Status: ${Object.entries(result.byStatus).map(([key, value]) => `${key}:${value}`).join(", ")} | Severity: ${Object.entries(result.bySeverity).map(([key, value]) => `${key}:${value}`).join(", ")}`,
+        structuredContent: result,
+      };
+    }),
+  );
+
+  return server;
+}
+
+export async function startCasefileMcpServer(): Promise<void> {
+  const server = createCasefileMcpServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+if (import.meta.main) {
+  startCasefileMcpServer().catch((error) => {
+    console.error("Casefile MCP server failed:", error);
+    process.exit(1);
+  });
+}

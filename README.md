@@ -1,8 +1,13 @@
-# Casefile — Offensive Security Case Tracker for pi
+# Casefile — Offensive Security Case Tracker
 
-Track durable security cases during bug bounties, CTFs, and security audits. Each case is a structured record that persists across sessions and automatically injects context into the LLM's system prompt.
+Track durable security cases during bug bounties, CTFs, and security audits. Each case is a structured record that persists across sessions.
 
-## Install
+Casefile now has two surfaces backed by the same ledger:
+
+- **pi extension** — registers pi tools, `/casefile`, and prompt context injection.
+- **Codex plugin** — bundles a Casefile skill and MCP server for Codex tool access.
+
+## Install for pi
 
 From npmjs:
 
@@ -31,7 +36,24 @@ pi install git:github.com/x4cc3/casefile
 
 For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 
-## Tools
+## Use with Codex
+
+This repo is also a Codex plugin root. The plugin files are:
+
+- `.codex-plugin/plugin.json` — Codex plugin manifest
+- `.mcp.json` — bundled MCP server config
+- `skills/casefile/SKILL.md` — Codex workflow instructions
+- `mcp/server.ts` — MCP stdio server backed by `ledger.ts`
+
+The MCP server starts over stdio and waits for MCP client input:
+
+```bash
+bun run mcp
+```
+
+For local Codex plugin testing, point a Codex marketplace entry at this plugin root or copy the repo into a local plugin directory and install it from that marketplace.
+
+## pi Tools
 
 | Tool | Description |
 |------|-------------|
@@ -43,6 +65,20 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 | **CaseLink** | Bidirectionally link two cases (exploit chains) |
 | **CaseUnlink** | Remove a link between two cases |
 | **CaseReport** | Generate a markdown report from a case |
+
+## Codex MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `casefile_add` | Open a new hypothesis or investigation case |
+| `casefile_update` | Update status, evidence, confidence, severity, next steps |
+| `casefile_get` | Full details of a single case by ID |
+| `casefile_list` | Browse cases with status/severity/priority/tag filters + pagination |
+| `casefile_search` | Full-text search across cases, optionally field-scoped |
+| `casefile_link` | Bidirectionally link two cases |
+| `casefile_unlink` | Remove a bidirectional case link |
+| `casefile_report` | Generate a markdown report from a case |
+| `casefile_count` | Count cases by status and severity |
 
 ## Case Fields
 
@@ -66,7 +102,7 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 | `blockers` | string[] | Current blockers |
 | `tags` | string[] | Tags for filtering |
 | `assumptions` | string[] | Explicit assumptions, unknowns, or uncertainty notes |
-| `linked_case_ids` | string[] | Related case IDs |
+| `linked_case_ids` | string[] | Related case IDs managed by `CaseLink`/`CaseUnlink` |
 
 ## Commands
 
@@ -78,13 +114,17 @@ On each turn, the extension injects a `<casefile_context>` block into the system
 
 ## Storage
 
-By default, cases are stored per project at `.pi/casefile.jsonl` under the detected workspace root. This prevents old bounty cases from leaking into unrelated directories.
+By default, pi cases are stored per project at `.pi/casefile.jsonl` under the detected workspace root. The Codex plugin opts into neutral project storage at `.casefile/casefile.jsonl`. This prevents old bounty cases from leaking into unrelated directories.
 
 Environment overrides:
 
+- `CASEFILE_PATH=/absolute/or/relative/file.jsonl` — force an exact ledger path for any surface
+- `CASEFILE_SCOPE=project` — use project-local neutral storage at `.casefile/casefile.jsonl`
+- `CASEFILE_SCOPE=global` — use the shared global ledger at `~/.casefile/casefile.jsonl`
+- `CODEX_CASEFILE_PATH` / `CODEX_CASEFILE_SCOPE` — Codex-specific aliases
 - `PI_CASEFILE_PATH=/absolute/or/relative/file.jsonl` — force an exact ledger path
-- `PI_CASEFILE_SCOPE=project` — use project-local storage (default)
-- `PI_CASEFILE_SCOPE=global` — use the shared global ledger at `~/.pi/casefile/casefile.jsonl`
+- `PI_CASEFILE_SCOPE=project` — use legacy project-local pi storage at `.pi/casefile.jsonl`
+- `PI_CASEFILE_SCOPE=global` — use the legacy shared global pi ledger at `~/.pi/casefile/casefile.jsonl`
 
 Each line is a complete JSON record. Features:
 
@@ -95,10 +135,10 @@ Each line is a complete JSON record. Features:
 - **Atomic rewrite** — link/unlink/delete rewrite through temp file + rename
 - **Dead-end memory** — use `CaseUpdate` with `status: killed` for duplicates, disproven leads, or cases that should not be pursued again
 - **Evidence guardrails** — confirmed cases require both observed evidence and a PoC/repro note; blocked, killed, and reported cases require supporting fields
-- **Promotion guard** — new cases cannot be opened as confirmed or reported; use `CaseUpdate` after validation
+- **Promotion guard** — new cases must start as hypothesis or investigating; use `CaseUpdate` for blocked, killed, confirmed, or reported states
 - **Redundant update guard** — repeated `CaseUpdate` calls that only restate an unchanged status (including already-confirmed cases) are no-ops
 - **Link/report guardrails** — repeated link/unlink calls are no-ops, and reports require confirmed or reported cases
-- **Report export** — `CaseReport` writes markdown under `.pi/report/` next to the project ledger
+- **Report export** — report tools write markdown under `report/` next to the active ledger
 
 ## Offensive Security Workflow
 

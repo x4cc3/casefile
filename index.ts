@@ -82,7 +82,6 @@ const CommonFields = {
   blockers: Type.Optional(Type.Array(Type.String(), { description: "Current blockers" })),
   tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for filtering" })),
   assumptions: Type.Optional(Type.Array(Type.String(), { description: "Explicit assumptions, unknowns, or uncertainty notes" })),
-  linked_case_ids: Type.Optional(Type.Array(Type.String(), { description: "Related case IDs" })),
 };
 
 // ── Tool: CaseAdd ─────────────────────────────────────────────────────
@@ -136,7 +135,7 @@ const SearchSchema = Type.Object(
   {
     query: Type.String({ description: "Text to search across cases" }),
     field: Type.Optional(
-      StringEnum(["title", "summary", "evidence", "impact", "target", "endpoint", "bugClass"] as const, {
+      StringEnum(["title", "summary", "evidence", "impact", "target", "endpoint", "bugClass", "poc"] as const, {
         description: "Restrict search to a specific field",
       }),
     ),
@@ -371,7 +370,6 @@ export default function casefileExtension(pi: ExtensionAPI) {
         blockers: params.blockers,
         tags: params.tags,
         assumptions: params.assumptions,
-        linkedCaseIds: params.linked_case_ids,
       });
       const record = result.record;
       return {
@@ -446,7 +444,6 @@ export default function casefileExtension(pi: ExtensionAPI) {
         blockers: params.blockers,
         tags: params.tags,
         assumptions: params.assumptions,
-        linkedCaseIds: params.linked_case_ids,
       });
       const record = result.record;
       return {
@@ -591,7 +588,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
     name: "CaseSearch",
     label: "Search Cases",
     description:
-      "Full-text search across cases. Optionally restrict to a specific field (title, evidence, impact, target, endpoint, bugClass). Returns paginated results with total count.",
+      "Full-text search across cases. Optionally restrict to a specific field (title, summary, evidence, impact, target, endpoint, bugClass, poc). Returns paginated results with total count.",
     promptSnippet: "Search cases by text query, optionally field-scoped",
     parameters: SearchSchema,
 
@@ -606,6 +603,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
           | "target"
           | "endpoint"
           | "bugClass"
+          | "poc"
           | undefined,
         status: params.status as CaseStatus | undefined,
         confidence: params.confidence as CaseConfidence | undefined,

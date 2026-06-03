@@ -75,12 +75,13 @@ export type CaseInput = {
   blockers?: string[];
   tags?: string[];
   assumptions?: string[];
+};
+
+type NormalizedCaseInput = Partial<CaseInput> & {
   linkedCaseIds?: string[];
 };
 
-export type CaseUpdate = Partial<Omit<CaseInput, "linkedCaseIds">> & {
-  linkedCaseIds?: string[];
-};
+export type CaseUpdate = Partial<CaseInput>;
 
 export type CaseUpdateResult = {
   record: CaseRecord;
@@ -103,7 +104,7 @@ export type CaseLinkResult = {
 
 export type CaseSearchOptions = {
   query?: string;
-  field?: "title" | "summary" | "evidence" | "impact" | "target" | "endpoint" | "bugClass";
+  field?: "title" | "summary" | "evidence" | "impact" | "target" | "endpoint" | "bugClass" | "poc";
   status?: CaseStatus;
   confidence?: CaseConfidence;
   severity?: CaseSeverity;
@@ -171,8 +172,14 @@ function hasDefined<T extends object>(value: T, key: keyof T): boolean {
   return hasOwn(value, key) && value[key] !== undefined;
 }
 
+function assertNoDirectLinkMutation(value: object): void {
+  if (hasOwn(value, "linkedCaseIds")) {
+    throw new Error("Case links must be changed with linkCases or unlinkCases");
+  }
+}
+
 function normalizeOptionalText(
-  input: CaseInput,
+  input: NormalizedCaseInput,
   field: keyof Pick<
     CaseInput,
     "target" | "endpoint" | "bugClass" | "summary" | "evidence" | "impact" | "nextStep" | "poc" | "remediation"
@@ -238,7 +245,7 @@ function noChangeReason(current: CaseRecord, update: CaseUpdate): string {
 function scopeFieldMatches(left: string | undefined, right: string | undefined): boolean {
   const a = normalizeMatchText(left);
   const b = normalizeMatchText(right);
-  return !a || !b || a === b;
+  return a === b;
 }
 
 function findDuplicateCase(records: CaseRecord[], candidate: CaseRecord): CaseRecord | undefined {
@@ -259,14 +266,26 @@ function findDuplicateCase(records: CaseRecord[], candidate: CaseRecord): CaseRe
 let ledgerPathOverride: string | undefined;
 let mutationQueue: Promise<void> = Promise.resolve();
 
+function firstEnv(...names: string[]): { name: string; value: string } | undefined {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return { name, value };
+  }
+  return undefined;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function detectWorkspaceRoot(): string {
   const envCandidates = [
+    process.env.CASEFILE_WORKSPACE_ROOT,
+    process.env.CODEX_WORKSPACE_ROOT,
+    process.env.CODEX_PROJECT_ROOT,
     process.env.PI_WORKSPACE_ROOT,
     process.env.PI_PROJECT_ROOT,
+    process.env.GITHUB_WORKSPACE,
     process.env.INIT_CWD,
     process.env.PWD,
   ].filter((value): value is string => Boolean(value?.trim()));
@@ -288,15 +307,20 @@ function detectWorkspaceRoot(): string {
 export function getCasefilePath(): string {
   if (ledgerPathOverride) return ledgerPathOverride;
 
-  const explicitPath = process.env.PI_CASEFILE_PATH?.trim();
-  if (explicitPath) return resolve(explicitPath);
+  const explicitPath = firstEnv("CASEFILE_PATH", "CODEX_CASEFILE_PATH", "PI_CASEFILE_PATH");
+  if (explicitPath) return resolve(explicitPath.value);
 
-  const scope = (process.env.PI_CASEFILE_SCOPE?.trim().toLowerCase() || "project");
-  if (scope === "global") {
+  const scopeConfig = firstEnv("CASEFILE_SCOPE", "CODEX_CASEFILE_SCOPE", "PI_CASEFILE_SCOPE");
+  const scope = (scopeConfig?.value.toLowerCase() || "project");
+  if (scope === "global" && scopeConfig?.name === "PI_CASEFILE_SCOPE") {
     return join(homedir(), ".pi", "casefile", "casefile.jsonl");
   }
+  if (scope === "global") return join(homedir(), ".casefile", "casefile.jsonl");
 
-  return join(detectWorkspaceRoot(), ".pi", "casefile.jsonl");
+  const projectDir = scopeConfig?.name === "CASEFILE_SCOPE" || scopeConfig?.name === "CODEX_CASEFILE_SCOPE"
+    ? ".casefile"
+    : ".pi";
+  return join(detectWorkspaceRoot(), projectDir, "casefile.jsonl");
 }
 
 export function getCasefileReportDir(): string {
@@ -385,13 +409,13 @@ function validateCase(record: CaseRecord): void {
 }
 
 function validateNewCaseInput(input: CaseInput): void {
-  if (input.status === "confirmed" || input.status === "reported") {
+  if (input.status && input.status !== "hypothesis" && input.status !== "investigating") {
     throw new Error("New cases must start as hypothesis or investigating; promote with CaseUpdate after validation");
   }
 }
 
 function normalizeCase(
-  input: CaseInput,
+  input: NormalizedCaseInput,
   existing?: CaseRecord,
 ): CaseRecord {
   const timestamp = nowIso();
@@ -477,6 +501,7 @@ async function writeCasefile(records: CaseRecord[]): Promise<void> {
 
 export async function addCaseResult(input: CaseInput): Promise<CaseAddResult> {
   return withLedgerMutation(async () => {
+    assertNoDirectLinkMutation(input);
     validateNewCaseInput(input);
     const record = normalizeCase(input);
     const records = await readCasefile();
@@ -508,6 +533,7 @@ export async function updateCaseResult(
   update: CaseUpdate,
 ): Promise<CaseUpdateResult> {
   return withLedgerMutation(async () => {
+    assertNoDirectLinkMutation(update);
     const records = await readCasefile();
     const current = records.find((r) => r.id === id);
     if (!current) {
@@ -533,7 +559,7 @@ export async function updateCaseResult(
         blockers: update.blockers ?? current.blockers,
         tags: update.tags ?? current.tags,
         assumptions: update.assumptions ?? current.assumptions,
-        linkedCaseIds: update.linkedCaseIds ?? current.linkedCaseIds,
+        linkedCaseIds: current.linkedCaseIds,
       },
       current,
     );

@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import {
   addCase,
   addCaseResult,
+  getCasefilePath,
   linkCases,
   linkCasesResult,
   readCasefile,
@@ -56,6 +57,37 @@ describe("casefile ledger", () => {
     });
   });
 
+  test("supports neutral casefile env vars while preserving legacy pi defaults", async () => {
+    const previous = {
+      CASEFILE_PATH: process.env.CASEFILE_PATH,
+      CASEFILE_SCOPE: process.env.CASEFILE_SCOPE,
+      PI_CASEFILE_PATH: process.env.PI_CASEFILE_PATH,
+      PI_CASEFILE_SCOPE: process.env.PI_CASEFILE_SCOPE,
+    };
+
+    try {
+      setCasefilePath(undefined);
+      process.env.CASEFILE_PATH = join(tempDir, "neutral.jsonl");
+      process.env.PI_CASEFILE_PATH = join(tempDir, "pi.jsonl");
+      expect(getCasefilePath()).toBe(join(tempDir, "neutral.jsonl"));
+
+      delete process.env.CASEFILE_PATH;
+      delete process.env.PI_CASEFILE_PATH;
+      process.env.CASEFILE_SCOPE = "project";
+      expect(getCasefilePath()).toBe(join(process.cwd(), ".casefile", "casefile.jsonl"));
+
+      delete process.env.CASEFILE_SCOPE;
+      process.env.PI_CASEFILE_SCOPE = "project";
+      expect(getCasefilePath()).toBe(join(process.cwd(), ".pi", "casefile.jsonl"));
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      setCasefilePath(ledgerPath);
+    }
+  });
+
   test("deduplicates active cases with the same title and scope", async () => {
     const first = await addCaseResult({
       title: " SSRF candidate ",
@@ -77,6 +109,30 @@ describe("casefile ledger", () => {
 
     const raw = await readFile(ledgerPath, "utf8");
     expect(raw.trim().split("\n")).toHaveLength(1);
+  });
+
+  test("keeps same-title cases separate when scope differs or becomes specific", async () => {
+    const generic = await addCaseResult({
+      title: "SSRF candidate",
+      evidence: "Generic audit note",
+    });
+    const scoped = await addCaseResult({
+      title: "SSRF candidate",
+      target: "api.example.test",
+      evidence: "Scoped audit note",
+    });
+    const otherEndpoint = await addCaseResult({
+      title: "SSRF candidate",
+      target: "api.example.test",
+      endpoint: "/fetch",
+      evidence: "Endpoint-specific audit note",
+    });
+
+    expect(generic.created).toBe(true);
+    expect(scoped.created).toBe(true);
+    expect(otherEndpoint.created).toBe(true);
+    expect(new Set([generic.record.id, scoped.record.id, otherEndpoint.record.id]).size).toBe(3);
+    expect(await readCasefile()).toHaveLength(3);
   });
 
   test("updates by appending a new version and treats no-op updates as unchanged", async () => {
@@ -152,21 +208,31 @@ describe("casefile ledger", () => {
       .rejects
       .toThrow("Confirmed cases require both evidence and poc");
 
-    await expect(addCase({ title: "Blocked without blocker", status: "blocked" }))
+    const terminalLead = await addCase({
+      title: "Terminal-state validation",
+      status: "investigating",
+    });
+
+    await expect(updateCaseResult(terminalLead.id, { status: "blocked" }))
       .rejects
       .toThrow("Blocked cases require at least one blocker");
 
-    await expect(addCase({ title: "Killed without reason", status: "killed" }))
+    await expect(updateCaseResult(terminalLead.id, { status: "killed" }))
       .rejects
       .toThrow("Killed cases require evidence, next step, blockers, or assumptions");
 
-    await expect(addCase({
+    const duplicateLead = await addCase({
       title: "Duplicate lead",
+      status: "investigating",
+    });
+    await expect(updateCaseResult(duplicateLead.id, {
       status: "killed",
       assumptions: ["Duplicate of case_123; no new evidence"],
     })).resolves.toMatchObject({
-      status: "killed",
-      assumptions: ["Duplicate of case_123; no new evidence"],
+      record: {
+        status: "killed",
+        assumptions: ["Duplicate of case_123; no new evidence"],
+      },
     });
 
     await expect(addCase({ title: "Reported without report data", status: "reported" }))
@@ -204,6 +270,34 @@ describe("casefile ledger", () => {
     const afterUnlink = await readCasefile();
     expect(afterUnlink.find((r) => r.id === primitive.id)?.linkedCaseIds).toEqual([]);
     expect(afterUnlink.find((r) => r.id === escalation.id)?.linkedCaseIds).toEqual([]);
+  });
+
+  test("rejects direct linked case mutation outside link helpers", async () => {
+    const first = await addCase({
+      title: "First chain step",
+      evidence: "Primitive observed",
+    });
+    const second = await addCase({
+      title: "Second chain step",
+      evidence: "Escalation observed",
+    });
+
+    await expect(addCase({
+      title: "Directly linked case",
+      linkedCaseIds: [first.id],
+    } as any))
+      .rejects
+      .toThrow("Case links must be changed with linkCases or unlinkCases");
+
+    await expect(updateCaseResult(first.id, {
+      linkedCaseIds: [second.id],
+    } as any))
+      .rejects
+      .toThrow("Case links must be changed with linkCases or unlinkCases");
+
+    const records = await readCasefile();
+    expect(records.find((r) => r.id === first.id)?.linkedCaseIds).toEqual([]);
+    expect(records.find((r) => r.id === second.id)?.linkedCaseIds).toEqual([]);
   });
 
   test("searches across fields and supports filters with pagination", async () => {

@@ -100,6 +100,12 @@ describe("casefile extension", () => {
     expect(pi.events.has("session_start")).toBe(true);
     expect(pi.events.has("before_agent_start")).toBe(true);
     expect(pi.events.has("tool_result")).toBe(true);
+
+    const addProperties = pi.tools.get("CaseAdd").parameters.properties;
+    const updateProperties = pi.tools.get("CaseUpdate").parameters.properties;
+    expect(addProperties.linked_case_ids).toBeUndefined();
+    expect(updateProperties.linked_case_ids).toBeUndefined();
+    expect(pi.tools.get("CaseSearch").parameters.properties.field.enum).toContain("poc");
   });
 
   test("executes the add, get, update, list, search, and report tools", async () => {
@@ -232,8 +238,12 @@ describe("casefile extension", () => {
       evidence: "Observed suspicious response",
       next_step: "Test <payload> safely",
     });
-    await executeTool(pi, "CaseAdd", {
+    const killed = await executeTool(pi, "CaseAdd", {
       title: "Killed duplicate",
+      status: "investigating",
+    });
+    await executeTool(pi, "CaseUpdate", {
+      id: killed.details.record.id,
       status: "killed",
       assumptions: ["Duplicate lead with no new evidence"],
     });
