@@ -15,7 +15,7 @@
     "url": "git+https://github.com/x4cc3/casefile.git"
   },
   "scripts": {
-    "test": "bun test",
+    "test": "bun test test",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "mcp": "bun run mcp/server.ts"
   },
@@ -29,7 +29,8 @@
     "ledger.ts",
     "mcp",
     "skills",
-    "tsconfig.json"
+    "tsconfig.json",
+    "bunfig.toml"
   ],
   "main": "index.ts",
   "pi": {

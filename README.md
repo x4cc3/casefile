@@ -41,9 +41,26 @@ For local development, symlink or copy into `~/.pi/agent/extensions/casefile/`.
 This repo is also a Codex plugin root. The plugin files are:
 
 - `.codex-plugin/plugin.json` — Codex plugin manifest
+- `.agents/plugins/marketplace.json` — Codex marketplace entry for CLI installs
 - `.mcp.json` — bundled MCP server config
 - `skills/casefile/SKILL.md` — Codex workflow instructions
 - `mcp/server.ts` — MCP stdio server backed by `ledger.ts`
+
+Install from this GitHub repo with the Codex CLI:
+
+```bash
+codex plugin marketplace add x4cc3/casefile --ref master
+codex plugin add casefile@casefile
+```
+
+Then start a new Codex thread and ask Codex to use Casefile. If you already added
+the marketplace and want the newest version, run:
+
+```bash
+codex plugin marketplace upgrade casefile
+codex plugin remove casefile
+codex plugin add casefile@casefile
+```
 
 The MCP server starts over stdio and waits for MCP client input:
 
