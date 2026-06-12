@@ -316,6 +316,21 @@ function buildCaseContext(records: CaseRecord[]): string {
     }
   }
 
+  if (hypothesis.length > 0) {
+    lines.push("  Hypotheses:");
+    for (const c of hypothesis) {
+      const nextStep = safeNextStep(c);
+      lines.push(`  - ${c.id}: ${safeTitle(c)}${nextStep ? ` → ${nextStep}` : ""}`);
+    }
+  }
+
+  if (blocked.length > 0) {
+    lines.push("  Blocked:");
+    for (const c of blocked) {
+      lines.push(`  - ${c.id}: ${safeTitle(c)}`);
+    }
+  }
+
   const highPrio = records.filter(
     (r) => r.priority === "P0" || r.priority === "P1",
   );

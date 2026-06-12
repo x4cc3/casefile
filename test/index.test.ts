@@ -271,6 +271,31 @@ describe("casefile extension", () => {
     expect(result.message.content).not.toContain("Already reported");
   });
 
+  test("includes hypothesis and blocked cases in prompt context", async () => {
+    const pi = createFakePi();
+    casefileExtension(pi as any);
+
+    await executeTool(pi, "CaseAdd", {
+      title: "Hypothesis lead",
+      status: "hypothesis",
+    });
+    const blocked = await executeTool(pi, "CaseAdd", {
+      title: "Blocked lead",
+      status: "investigating",
+    });
+    await executeTool(pi, "CaseUpdate", {
+      id: blocked.details.record.id,
+      status: "blocked",
+      blockers: ["Needs environment access"],
+    });
+
+    const handler = pi.events.get("before_agent_start")?.[0];
+    const result = await handler();
+
+    expect(result.message.content).toContain("Hypothesis lead");
+    expect(result.message.content).toContain("Blocked lead");
+  });
+
   test("supports the non-ui dashboard command and status updates", async () => {
     const pi = createFakePi();
     casefileExtension(pi as any);

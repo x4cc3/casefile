@@ -459,27 +459,21 @@ function normalizeCase(
 export async function readCasefile(): Promise<CaseRecord[]> {
   try {
     const raw = await readFile(getCasefilePath(), "utf8");
-    const records: CaseRecord[] = [];
-    const seenIds = new Set<string>();
+    const recordsMap = new Map<string, CaseRecord>();
+    let lineNum = 0;
 
     for (const line of raw.split("\n")) {
+      lineNum++;
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
         const parsed = JSON.parse(trimmed) as CaseRecord;
-        // Deduplicate on read: last write wins (handles appends from updateCase)
-        if (seenIds.has(parsed.id)) {
-          const dupIndex = records.findIndex((r) => r.id === parsed.id);
-          if (dupIndex !== -1) records[dupIndex] = parsed;
-        } else {
-          seenIds.add(parsed.id);
-          records.push(parsed);
-        }
+        recordsMap.set(parsed.id, parsed);
       } catch {
-        throw new Error(`Invalid casefile JSON at line ${records.length + 1} in ${getCasefilePath()}`);
+        throw new Error(`Invalid casefile JSON at line ${lineNum} in ${getCasefilePath()}`);
       }
     }
-    return records;
+    return Array.from(recordsMap.values());
   } catch (error: any) {
     if (error?.code === "ENOENT") return [];
     throw error;
@@ -566,6 +560,15 @@ export async function updateCaseResult(
 
     if (casesMateriallyEqual(current, next)) {
       return { record: current, changed: false, reason: noChangeReason(current, update) };
+    }
+
+    const duplicate = findDuplicateCase(records.filter((r) => r.id !== id), next);
+    if (duplicate) {
+      return {
+        record: current,
+        changed: false,
+        reason: `Update would create a duplicate of case ${duplicate.id}`,
+      };
     }
 
     // Append updated record — dedup on read picks up the latest version

@@ -164,6 +164,18 @@ describe("casefile ledger", () => {
     expect(await readCasefile()).toHaveLength(1);
   });
 
+  test("prevents duplicate titles and scopes during update", async () => {
+    await addCase({ title: "First Case" });
+    const second = await addCase({ title: "Second Case" });
+
+    const result = await updateCaseResult(second.id, { title: "First Case" });
+    expect(result.changed).toBe(false);
+    expect(result.reason).toContain("duplicate of case");
+
+    const records = await readCasefile();
+    expect(records.filter((r) => r.title === "First Case")).toHaveLength(1);
+  });
+
   test("clears optional text fields with an empty string update", async () => {
     const record = await addCase({
       title: "Stale finding",
@@ -377,7 +389,7 @@ describe("casefile ledger", () => {
   test("returns an empty ledger only when the file does not exist", async () => {
     await expect(readCasefile()).resolves.toEqual([]);
 
-    await writeFile(ledgerPath, "{\"id\":\"case_valid\"}\nnot-json\n", "utf8");
-    await expect(readCasefile()).rejects.toThrow("Invalid casefile JSON");
+    await writeFile(ledgerPath, "{\"id\":\"case_valid\"}\n\nnot-json\n", "utf8");
+    await expect(readCasefile()).rejects.toThrow("Invalid casefile JSON at line 3");
   });
 });
