@@ -135,7 +135,7 @@ function caseInputFromParams(params: CaseToolParams): Partial<CaseInput> {
 export function createCasefileMcpServer(): McpServer {
   const server = new McpServer({
     name: "casefile",
-    version: "1.2.1",
+    version: "1.2.2",
   });
 
   server.registerTool(
