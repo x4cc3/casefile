@@ -1,6 +1,7 @@
 ---
 name: casefile
 description: Use when tracking security investigations, bug bounty findings, CTF leads, audit evidence, exploit chains, dead ends, or reports in the Casefile ledger through Codex.
+license: MIT
 ---
 
 # Casefile
