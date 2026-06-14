@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-import { setCasefilePath } from "../ledger.js";
+import { setCasefilePath } from "../ledger.ts";
 
 mock.module("@earendil-works/pi-ai", () => ({
   StringEnum: (values: readonly string[]) => ({ enum: values }),

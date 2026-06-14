@@ -17,6 +17,11 @@ import {
   type CaseConfidence,
   type CaseSeverity,
   type CasePriority,
+  type CaseToolParams,
+  STATUS_VALUES,
+  CONFIDENCE_VALUES,
+  SEVERITY_VALUES,
+  PRIORITY_VALUES,
   addCaseResult,
   updateCaseResult,
   searchCases,
@@ -29,40 +34,15 @@ import {
   getCasefilePath,
   readCasefile,
   writeCaseReport,
+  caseInputFromParams,
 } from "./ledger.js";
 
 // ── Schemas ───────────────────────────────────────────────────────────
 
-const CaseStatusSchema = StringEnum([
-  "hypothesis",
-  "investigating",
-  "confirmed",
-  "blocked",
-  "killed",
-  "reported",
-] as const satisfies CaseStatus[]);
-
-const CaseConfidenceSchema = StringEnum([
-  "low",
-  "medium",
-  "high",
-] as const satisfies CaseConfidence[]);
-
-const CaseSeveritySchema = StringEnum([
-  "info",
-  "low",
-  "medium",
-  "high",
-  "critical",
-] as const satisfies CaseSeverity[]);
-
-const CasePrioritySchema = StringEnum([
-  "P0",
-  "P1",
-  "P2",
-  "P3",
-  "P4",
-] as const satisfies CasePriority[]);
+const CaseStatusSchema = StringEnum(STATUS_VALUES);
+const CaseConfidenceSchema = StringEnum(CONFIDENCE_VALUES);
+const CaseSeveritySchema = StringEnum(SEVERITY_VALUES);
+const CasePrioritySchema = StringEnum(PRIORITY_VALUES);
 
 const CommonFields = {
   status: Type.Optional(CaseStatusSchema),
@@ -177,9 +157,14 @@ const ReportSchema = Type.Object(
   { additionalProperties: false },
 );
 
+interface Theme {
+  fg(color: string, text: string): string;
+  bold(text: string): string;
+}
+
 // ── Rendering helpers ────────────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
+const STATUS_COLORS: Record<CaseStatus, string> = {
   hypothesis: "dim",
   investigating: "warning",
   confirmed: "success",
@@ -188,7 +173,7 @@ const STATUS_COLORS: Record<string, string> = {
   reported: "accent",
 };
 
-const CONFIDENCE_COLORS: Record<string, string> = {
+const CONFIDENCE_COLORS: Record<CaseConfidence, string> = {
   low: "dim",
   medium: "warning",
   high: "success",
@@ -208,7 +193,7 @@ function sanitizeForPrompt(value: string | undefined, maxLength = 160): string |
   return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
-function renderOneLine(record: CaseRecord, theme: any): string {
+function renderOneLine(record: CaseRecord, theme: Theme): string {
   const statusColor = STATUS_COLORS[record.status] ?? "muted";
   const confColor = CONFIDENCE_COLORS[record.confidence] ?? "muted";
   let line = theme.fg(statusColor, record.status) + "/" + theme.fg(confColor, record.confidence);
@@ -223,7 +208,7 @@ function renderOneLine(record: CaseRecord, theme: any): string {
 
 class CasefileDashboard {
   private records: CaseRecord[];
-  private theme: any;
+  private theme: Theme;
   private onClose: () => void;
   private cachedWidth?: number;
   private cachedLines?: string[];
@@ -366,26 +351,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
     parameters: AddSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const result = await addCaseResult({
-        title: params.title,
-        status: params.status,
-        confidence: params.confidence,
-        severity: params.severity,
-        priority: params.priority,
-        target: params.target,
-        endpoint: params.endpoint,
-        bugClass: params.bug_class,
-        summary: params.summary,
-        evidence: params.evidence,
-        impact: params.impact,
-        nextStep: params.next_step,
-        poc: params.poc,
-        remediation: params.remediation,
-        references: params.references,
-        blockers: params.blockers,
-        tags: params.tags,
-        assumptions: params.assumptions,
-      });
+      const result = await addCaseResult({ title: params.title, ...caseInputFromParams(params as CaseToolParams) });
       const record = result.record;
       return {
         content: [
@@ -440,26 +406,7 @@ export default function casefileExtension(pi: ExtensionAPI) {
     parameters: UpdateSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const result = await updateCaseResult(params.id, {
-        title: params.title,
-        status: params.status,
-        confidence: params.confidence,
-        severity: params.severity,
-        priority: params.priority,
-        target: params.target,
-        endpoint: params.endpoint,
-        bugClass: params.bug_class,
-        summary: params.summary,
-        evidence: params.evidence,
-        impact: params.impact,
-        nextStep: params.next_step,
-        poc: params.poc,
-        remediation: params.remediation,
-        references: params.references,
-        blockers: params.blockers,
-        tags: params.tags,
-        assumptions: params.assumptions,
-      });
+      const result = await updateCaseResult(params.id, caseInputFromParams(params as CaseToolParams));
       const record = result.record;
       return {
         content: [
@@ -521,10 +468,6 @@ export default function casefileExtension(pi: ExtensionAPI) {
       };
     },
 
-    isReadOnly() {
-      return true;
-    },
-
     renderCall(args, theme) {
       return new Text(
         theme.fg("toolTitle", theme.bold("CaseGet ")) + theme.fg("dim", args.id),
@@ -573,10 +516,6 @@ export default function casefileExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text: `${header}\n${body}` }],
         details: { cases, total, offset },
       };
-    },
-
-    isReadOnly() {
-      return true;
     },
 
     renderCall(_args, theme) {
@@ -635,10 +574,6 @@ export default function casefileExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text: `${header}\n${body}` }],
         details: { cases, total, offset },
       };
-    },
-
-    isReadOnly() {
-      return true;
     },
 
     renderCall(args, theme) {

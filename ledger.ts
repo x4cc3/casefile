@@ -16,19 +16,20 @@ import { homedir } from "os";
 
 // ── Types ────────────────────────────────────────────────────────────
 
-export type CaseStatus =
-  | "hypothesis"
-  | "investigating"
-  | "confirmed"
-  | "blocked"
-  | "killed"
-  | "reported";
+export const STATUS_VALUES = ["hypothesis", "investigating", "confirmed", "blocked", "killed", "reported"] as const;
+export type CaseStatus = (typeof STATUS_VALUES)[number];
 
-export type CaseConfidence = "low" | "medium" | "high";
+export const CONFIDENCE_VALUES = ["low", "medium", "high"] as const;
+export type CaseConfidence = (typeof CONFIDENCE_VALUES)[number];
 
-export type CaseSeverity = "info" | "low" | "medium" | "high" | "critical";
+export const SEVERITY_VALUES = ["info", "low", "medium", "high", "critical"] as const;
+export type CaseSeverity = (typeof SEVERITY_VALUES)[number];
 
-export type CasePriority = "P0" | "P1" | "P2" | "P3" | "P4";
+export const PRIORITY_VALUES = ["P0", "P1", "P2", "P3", "P4"] as const;
+export type CasePriority = (typeof PRIORITY_VALUES)[number];
+
+export const SEARCH_FIELD_VALUES = ["title", "summary", "evidence", "impact", "target", "endpoint", "bugClass", "poc"] as const;
+export type CaseSearchField = (typeof SEARCH_FIELD_VALUES)[number];
 
 export type CaseRecord = {
   id: string;
@@ -114,6 +115,34 @@ export type CaseSearchOptions = {
   offset?: number;
 };
 
+export type CaseToolParams = Partial<Omit<CaseInput, "bugClass" | "nextStep">> & {
+  bug_class?: string;
+  next_step?: string;
+};
+
+export function caseInputFromParams(params: CaseToolParams): Partial<CaseInput> {
+  return {
+    ...(params.title === undefined ? {} : { title: params.title }),
+    status: params.status,
+    confidence: params.confidence,
+    severity: params.severity,
+    priority: params.priority,
+    target: params.target,
+    endpoint: params.endpoint,
+    bugClass: params.bug_class,
+    summary: params.summary,
+    evidence: params.evidence,
+    impact: params.impact,
+    nextStep: params.next_step,
+    poc: params.poc,
+    remediation: params.remediation,
+    references: params.references,
+    blockers: params.blockers,
+    tags: params.tags,
+    assumptions: params.assumptions,
+  };
+}
+
 // ── Constants ────────────────────────────────────────────────────────
 
 const STATUS_ORDER: CaseStatus[] = [
@@ -162,6 +191,14 @@ function normalizeText(value: string | undefined): string | undefined {
 
 function normalizeMatchText(value: string | undefined): string {
   return normalizeText(value)?.toLowerCase().replace(/\s+/g, " ") ?? "";
+}
+
+interface NodeError extends Error {
+  code?: string;
+}
+
+function isNodeError(error: unknown): error is NodeError {
+  return error instanceof Error;
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
@@ -296,12 +333,15 @@ function detectWorkspaceRoot(): string {
   }
 
   let current = resolve(process.cwd());
-  while (true) {
+  let depth = 0;
+  while (depth < 20) {
     if (existsSync(join(current, ".git"))) return current;
     const parent = dirname(current);
     if (parent === current) return resolve(process.cwd());
     current = parent;
+    depth++;
   }
+  return resolve(process.cwd());
 }
 
 export function getCasefilePath(): string {
@@ -344,8 +384,8 @@ async function acquireLedgerLock(): Promise<() => Promise<void>> {
       return async () => {
         await rm(lockPath, { force: true });
       };
-    } catch (error: any) {
-      if (error?.code !== "EEXIST") throw error;
+    } catch (error: unknown) {
+      if (isNodeError(error) && error.code !== "EEXIST") throw error;
 
       try {
         const info = await stat(lockPath);
@@ -474,8 +514,8 @@ export async function readCasefile(): Promise<CaseRecord[]> {
       }
     }
     return Array.from(recordsMap.values());
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return [];
+  } catch (error: unknown) {
+    if (isNodeError(error) && error.code === "ENOENT") return [];
     throw error;
   }
 }

@@ -10,7 +10,9 @@
     "types": ["bun"]
   },
   "include": [
+    "index.ts",
     "ledger.ts",
-    "mcp/**/*.ts"
+    "mcp/**/*.ts",
+    "test/**/*.ts"
   ]
 }

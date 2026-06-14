@@ -3,12 +3,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import * as z from "zod/v4";
 
 import {
-  type CaseConfidence,
-  type CaseInput,
-  type CasePriority,
-  type CaseSearchOptions,
-  type CaseSeverity,
-  type CaseStatus,
+  STATUS_VALUES,
+  CONFIDENCE_VALUES,
+  SEVERITY_VALUES,
+  PRIORITY_VALUES,
+  SEARCH_FIELD_VALUES,
   addCaseResult,
   countCases,
   formatCase,
@@ -21,6 +20,7 @@ import {
   unlinkCasesResult,
   updateCaseResult,
   writeCaseReport,
+  caseInputFromParams,
 } from "../ledger.js";
 
 type CasefileMcpToolResult = {
@@ -29,39 +29,13 @@ type CasefileMcpToolResult = {
   structuredContent?: Record<string, unknown>;
 };
 
-const STATUS_VALUES = [
-  "hypothesis",
-  "investigating",
-  "confirmed",
-  "blocked",
-  "killed",
-  "reported",
-] as const satisfies readonly CaseStatus[];
 
-const CONFIDENCE_VALUES = ["low", "medium", "high"] as const satisfies readonly CaseConfidence[];
-const SEVERITY_VALUES = ["info", "low", "medium", "high", "critical"] as const satisfies readonly CaseSeverity[];
-const PRIORITY_VALUES = ["P0", "P1", "P2", "P3", "P4"] as const satisfies readonly CasePriority[];
-const SEARCH_FIELD_VALUES = [
-  "title",
-  "summary",
-  "evidence",
-  "impact",
-  "target",
-  "endpoint",
-  "bugClass",
-  "poc",
-] as const satisfies readonly NonNullable<CaseSearchOptions["field"]>[];
 
 const statusSchema = z.enum(STATUS_VALUES);
 const confidenceSchema = z.enum(CONFIDENCE_VALUES);
 const severitySchema = z.enum(SEVERITY_VALUES);
 const prioritySchema = z.enum(PRIORITY_VALUES);
 const searchFieldSchema = z.enum(SEARCH_FIELD_VALUES);
-
-type CaseToolParams = Partial<Omit<CaseInput, "bugClass" | "nextStep">> & {
-  bug_class?: string;
-  next_step?: string;
-};
 
 const commonCaseFields = {
   status: statusSchema.optional().describe("Case status"),
@@ -107,29 +81,6 @@ async function runTool(
   } catch (error) {
     return errorResult(error);
   }
-}
-
-function caseInputFromParams(params: CaseToolParams): Partial<CaseInput> {
-  return {
-    ...(params.title === undefined ? {} : { title: params.title }),
-    status: params.status,
-    confidence: params.confidence,
-    severity: params.severity,
-    priority: params.priority,
-    target: params.target,
-    endpoint: params.endpoint,
-    bugClass: params.bug_class,
-    summary: params.summary,
-    evidence: params.evidence,
-    impact: params.impact,
-    nextStep: params.next_step,
-    poc: params.poc,
-    remediation: params.remediation,
-    references: params.references,
-    blockers: params.blockers,
-    tags: params.tags,
-    assumptions: params.assumptions,
-  };
 }
 
 export function createCasefileMcpServer(): McpServer {
