@@ -7,6 +7,7 @@
   },
   "homepage": "https://github.com/x4cc3/casefile",
   "repository": "https://github.com/x4cc3/casefile",
+  "license": "MIT",
   "keywords": [
     "casefile",
     "security",
@@ -30,6 +31,7 @@
     "defaultPrompt": [
       "Track this security investigation in Casefile."
     ],
+    "composerIcon": "./assets/icon.svg",
     "brandColor": "#1F6FEB"
   }
 }
