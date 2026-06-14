@@ -32,6 +32,13 @@
       "Track this security investigation in Casefile."
     ],
     "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.png",
+    "screenshots": [
+      "./assets/screenshot.png"
+    ],
+    "websiteURL": "https://github.com/x4cc3/casefile",
+    "privacyPolicyURL": "https://github.com/x4cc3/casefile#privacy-policy",
+    "termsOfServiceURL": "https://github.com/x4cc3/casefile#terms-of-service",
     "brandColor": "#1F6FEB"
   }
 }
