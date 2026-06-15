@@ -17,7 +17,6 @@ import {
   type CaseConfidence,
   type CaseSeverity,
   type CasePriority,
-  type CaseToolParams,
   STATUS_VALUES,
   CONFIDENCE_VALUES,
   SEVERITY_VALUES,
@@ -34,7 +33,6 @@ import {
   getCasefilePath,
   readCasefile,
   writeCaseReport,
-  caseInputFromParams,
 } from "./ledger.js";
 
 // ── Schemas ───────────────────────────────────────────────────────────
@@ -51,11 +49,11 @@ const CommonFields = {
   priority: Type.Optional(CasePrioritySchema),
   target: Type.Optional(Type.String({ description: "Target asset, host, repo, or scope" })),
   endpoint: Type.Optional(Type.String({ description: "Endpoint, route, file, or object" })),
-  bug_class: Type.Optional(Type.String({ description: "Bug class or root cause category" })),
+  bugClass: Type.Optional(Type.String({ description: "Bug class or root cause category" })),
   summary: Type.Optional(Type.String({ description: "Short report summary" })),
   evidence: Type.Optional(Type.String({ description: "Observed evidence or repro notes" })),
   impact: Type.Optional(Type.String({ description: "Security impact or chain value" })),
-  next_step: Type.Optional(Type.String({ description: "Next validation or exploit step" })),
+  nextStep: Type.Optional(Type.String({ description: "Next validation or exploit step" })),
   poc: Type.Optional(Type.String({ description: "Proof of concept steps" })),
   remediation: Type.Optional(Type.String({ description: "How to fix it" })),
   references: Type.Optional(Type.Array(Type.String(), { description: "External URLs, CVEs" })),
@@ -346,12 +344,12 @@ export default function casefileExtension(pi: ExtensionAPI) {
       "Before using CaseAdd, check active cases from the injected casefile context or CaseList/CaseSearch. Do not add a duplicate case for the same title and scope.",
       "Set status='hypothesis' for unconfirmed observations and 'investigating' when actively testing. Use CaseUpdate, not CaseAdd, to mark proof-backed cases as 'confirmed' or filed cases as 'reported'.",
       "Do not mark a case confirmed from code review or static reasoning alone. Keep it investigating until there is a real repro, test run, exploit run, or equivalent validation captured in poc.",
-      "Always record evidence in the evidence field, impact in the impact field, and next steps in the next_step field. These are critical for chain construction.",
+      "Always record evidence in the evidence field, impact in the impact field, and next steps in the nextStep field. These are critical for chain construction.",
     ],
     parameters: AddSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const result = await addCaseResult({ title: params.title, ...caseInputFromParams(params as CaseToolParams) });
+      const result = await addCaseResult(params);
       const record = result.record;
       return {
         content: [
@@ -406,7 +404,8 @@ export default function casefileExtension(pi: ExtensionAPI) {
     parameters: UpdateSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const result = await updateCaseResult(params.id, caseInputFromParams(params as CaseToolParams));
+      const { id, ...update } = params;
+      const result = await updateCaseResult(id, update);
       const record = result.record;
       return {
         content: [
