@@ -20,7 +20,6 @@ import {
   unlinkCasesResult,
   updateCaseResult,
   writeCaseReport,
-  caseInputFromParams,
 } from "../ledger.js";
 
 type CasefileMcpToolResult = {
@@ -44,11 +43,11 @@ const commonCaseFields = {
   priority: prioritySchema.optional().describe("Triage priority"),
   target: z.string().optional().describe("Target asset, host, repo, or scope"),
   endpoint: z.string().optional().describe("Endpoint, route, file, or object"),
-  bug_class: z.string().optional().describe("Bug class or root cause category"),
+  bugClass: z.string().optional().describe("Bug class or root cause category"),
   summary: z.string().optional().describe("Short report summary"),
   evidence: z.string().optional().describe("Observed evidence or repro notes"),
   impact: z.string().optional().describe("Security impact or chain value"),
-  next_step: z.string().optional().describe("Next validation or exploit step"),
+  nextStep: z.string().optional().describe("Next validation or exploit step"),
   poc: z.string().optional().describe("Proof of concept steps"),
   remediation: z.string().optional().describe("How to fix it"),
   references: z.array(z.string()).optional().describe("External URLs, CVEs, or advisories"),
@@ -86,7 +85,7 @@ async function runTool(
 export function createCasefileMcpServer(): McpServer {
   const server = new McpServer({
     name: "casefile",
-    version: "1.2.2",
+    version: "1.2.3",
   });
 
   server.registerTool(
@@ -106,7 +105,7 @@ export function createCasefileMcpServer(): McpServer {
       },
     },
     async (params) => runTool(async () => {
-      const result = await addCaseResult({ ...caseInputFromParams(params), title: params.title });
+      const result = await addCaseResult(params);
       const text = result.created
         ? `Case opened:\n${formatCaseDetail(result.record)}\n\nLedger: ${getCasefilePath()}`
         : `Case already exists: ${result.reason ?? result.record.id}\n${formatCaseDetail(result.record)}\n\nUse casefile_update only for materially new evidence, PoC, impact, blockers, or status changes.`;
@@ -132,7 +131,8 @@ export function createCasefileMcpServer(): McpServer {
       },
     },
     async (params) => runTool(async () => {
-      const result = await updateCaseResult(params.id, caseInputFromParams(params));
+      const { id, ...update } = params;
+      const result = await updateCaseResult(id, update);
       const text = result.changed
         ? `Case updated:\n${formatCaseDetail(result.record)}`
         : `Case unchanged: ${result.reason ?? "no material fields changed"}\n${formatCaseDetail(result.record)}`;

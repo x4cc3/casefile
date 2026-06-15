@@ -115,33 +115,6 @@ export type CaseSearchOptions = {
   offset?: number;
 };
 
-export type CaseToolParams = Partial<Omit<CaseInput, "bugClass" | "nextStep">> & {
-  bug_class?: string;
-  next_step?: string;
-};
-
-export function caseInputFromParams(params: CaseToolParams): Partial<CaseInput> {
-  return {
-    ...(params.title === undefined ? {} : { title: params.title }),
-    status: params.status,
-    confidence: params.confidence,
-    severity: params.severity,
-    priority: params.priority,
-    target: params.target,
-    endpoint: params.endpoint,
-    bugClass: params.bug_class,
-    summary: params.summary,
-    evidence: params.evidence,
-    impact: params.impact,
-    nextStep: params.next_step,
-    poc: params.poc,
-    remediation: params.remediation,
-    references: params.references,
-    blockers: params.blockers,
-    tags: params.tags,
-    assumptions: params.assumptions,
-  };
-}
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -231,45 +204,9 @@ function stableShortId(input: string): string {
   return createHash("sha1").update(input).digest("hex").slice(0, 10);
 }
 
-const MATERIAL_RECORD_FIELDS = [
-  "title",
-  "status",
-  "confidence",
-  "severity",
-  "priority",
-  "target",
-  "endpoint",
-  "bugClass",
-  "summary",
-  "evidence",
-  "impact",
-  "nextStep",
-  "poc",
-  "remediation",
-  "references",
-  "blockers",
-  "tags",
-  "assumptions",
-  "linkedCaseIds",
-] as const satisfies readonly (keyof CaseRecord)[];
-
-function sameStringList(left: string[] | undefined, right: string[] | undefined): boolean {
-  const a = normalizeList(left).sort();
-  const b = normalizeList(right).sort();
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
 function casesMateriallyEqual(left: CaseRecord, right: CaseRecord): boolean {
-  for (const field of MATERIAL_RECORD_FIELDS) {
-    const a = left[field];
-    const b = right[field];
-    if (Array.isArray(a) || Array.isArray(b)) {
-      if (!sameStringList(a as string[] | undefined, b as string[] | undefined)) return false;
-      continue;
-    }
-    if ((a ?? undefined) !== (b ?? undefined)) return false;
-  }
-  return true;
+  const normalize = (r: CaseRecord) => JSON.stringify({ ...r, updatedAt: "", createdAt: "" });
+  return normalize(left) === normalize(right);
 }
 
 function noChangeReason(current: CaseRecord, update: CaseUpdate): string {
@@ -311,35 +248,18 @@ function firstEnv(...names: string[]): { name: string; value: string } | undefin
   return undefined;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { setTimeout as sleep } from "timers/promises";
 
 function detectWorkspaceRoot(): string {
-  const envCandidates = [
-    process.env.CASEFILE_WORKSPACE_ROOT,
-    process.env.CODEX_WORKSPACE_ROOT,
-    process.env.CODEX_PROJECT_ROOT,
-    process.env.PI_WORKSPACE_ROOT,
-    process.env.PI_PROJECT_ROOT,
-    process.env.GITHUB_WORKSPACE,
-    process.env.INIT_CWD,
-    process.env.PWD,
-  ].filter((value): value is string => Boolean(value?.trim()));
+  const envs = ["CASEFILE_WORKSPACE_ROOT", "CODEX_WORKSPACE_ROOT", "PI_WORKSPACE_ROOT", "GITHUB_WORKSPACE", "PWD"];
+  for (const e of envs) if (process.env[e]) return resolve(process.env[e]!);
 
-  for (const candidate of envCandidates) {
-    const resolved = resolve(candidate);
-    if (existsSync(resolved)) return resolved;
-  }
-
-  let current = resolve(process.cwd());
-  let depth = 0;
-  while (depth < 20) {
-    if (existsSync(join(current, ".git"))) return current;
-    const parent = dirname(current);
-    if (parent === current) return resolve(process.cwd());
-    current = parent;
-    depth++;
+  let curr = resolve(process.cwd());
+  for (let i = 0; i < 20; i++) {
+    if (existsSync(join(curr, ".git"))) return curr;
+    const parent = dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
   }
   return resolve(process.cwd());
 }
@@ -827,35 +747,13 @@ export function formatCases(records: CaseRecord[]): string {
 }
 
 export function formatCaseDetail(record: CaseRecord): string {
-  const lines = [
-    `═══ ${record.id} ═══`,
-    `Title:       ${record.title}`,
-    `Status:      ${record.status}`,
-    `Confidence:  ${record.confidence}`,
-  ];
-  if (record.severity) lines.push(`Severity:    ${record.severity}`);
-  if (record.priority) lines.push(`Priority:    ${record.priority}`);
-  if (record.target) lines.push(`Target:      ${record.target}`);
-  if (record.endpoint) lines.push(`Endpoint:    ${record.endpoint}`);
-  if (record.bugClass) lines.push(`Bug class:   ${record.bugClass}`);
-  if (record.summary) lines.push(`Summary:     ${record.summary}`);
-  if (record.evidence) lines.push(`Evidence:    ${record.evidence}`);
-  if (record.impact) lines.push(`Impact:      ${record.impact}`);
-  if (record.poc) lines.push(`PoC:         ${record.poc}`);
-  if (record.remediation) lines.push(`Remediation: ${record.remediation}`);
-  if (record.nextStep) lines.push(`Next step:   ${record.nextStep}`);
-  if (record.references?.length)
-    lines.push(`References:  ${record.references.join(", ")}`);
-  if (record.blockers?.length)
-    lines.push(`Blockers:    ${record.blockers.join(", ")}`);
-  if (record.assumptions?.length)
-    lines.push(`Assumptions: ${record.assumptions.join(", ")}`);
-  if (record.tags?.length) lines.push(`Tags:        ${record.tags.join(", ")}`);
-  if (record.linkedCaseIds.length)
-    lines.push(`Linked:      ${record.linkedCaseIds.join(", ")}`);
-  lines.push(`Created:     ${record.createdAt}`);
-  lines.push(`Updated:     ${record.updatedAt}`);
-  return lines.join("\n");
+  const lines = [`═══ ${record.id} ═══`];
+  for (const [key, val] of Object.entries(record)) {
+    if (!val || (Array.isArray(val) && !val.length) || ["id", "createdAt", "updatedAt"].includes(key)) continue;
+    const label = key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, " $1");
+    lines.push(`${label.padEnd(12)} ${Array.isArray(val) ? val.join(", ") : val}`);
+  }
+  return lines.concat([`Created:     ${record.createdAt}`, `Updated:     ${record.updatedAt}`]).join("\n");
 }
 
 function slugify(value: string): string {

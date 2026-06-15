@@ -120,10 +120,10 @@ describe("casefile extension", () => {
       priority: "P1",
       target: "app.example.test",
       endpoint: "/download",
-      bug_class: "IDOR",
+      bugClass: "IDOR",
       summary: "Downloads are authorized by object ID only",
       evidence: "download?id=42 returns another user's file",
-      next_step: "Confirm access as a second account",
+      nextStep: "Confirm access as a second account",
       tags: ["idor"],
     });
     const record = added.details.record;
@@ -167,13 +167,13 @@ describe("casefile extension", () => {
     const first = await executeTool(pi, "CaseAdd", {
       title: "Provider metadata injection",
       target: "packages/ai",
-      bug_class: "validation bypass",
+      bugClass: "validation bypass",
       evidence: "Initial audit note",
     });
     const duplicate = await executeTool(pi, "CaseAdd", {
       title: " provider metadata   injection ",
       target: "packages/ai",
-      bug_class: "Validation Bypass",
+      bugClass: "Validation Bypass",
       evidence: "Repeated audit note",
     });
 
@@ -236,7 +236,7 @@ describe("casefile extension", () => {
       status: "investigating",
       summary: "This should not be injected",
       evidence: "Observed suspicious response",
-      next_step: "Test <payload> safely",
+      nextStep: "Test <payload> safely",
     });
     const killed = await executeTool(pi, "CaseAdd", {
       title: "Killed duplicate",
