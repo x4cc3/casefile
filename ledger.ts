@@ -138,24 +138,6 @@ const STATUS_ORDER: CaseStatus[] = [
   "reported",
 ];
 
-const ALL_TEXT_FIELDS: (keyof CaseRecord)[] = [
-  "id",
-  "title",
-  "status",
-  "confidence",
-  "severity",
-  "priority",
-  "target",
-  "endpoint",
-  "bugClass",
-  "summary",
-  "evidence",
-  "impact",
-  "nextStep",
-  "poc",
-  "remediation",
-];
-
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function nowIso(): string {
@@ -175,14 +157,6 @@ function normalizeText(value: string | undefined): string | undefined {
 
 function normalizeMatchText(value: string | undefined): string {
   return normalizeText(value)?.toLowerCase().replace(/\s+/g, " ") ?? "";
-}
-
-interface NodeError extends Error {
-  code?: string;
-}
-
-function isNodeError(error: unknown): error is NodeError {
-  return error instanceof Error;
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
@@ -227,12 +201,6 @@ function noChangeReason(current: CaseRecord, update: CaseUpdate): string {
   return "No material fields changed.";
 }
 
-function scopeFieldMatches(left: string | undefined, right: string | undefined): boolean {
-  const a = normalizeMatchText(left);
-  const b = normalizeMatchText(right);
-  return a === b;
-}
-
 function findDuplicateCase(records: CaseRecord[], candidate: CaseRecord): CaseRecord | undefined {
   const title = normalizeMatchText(candidate.title);
   if (!title) return undefined;
@@ -240,9 +208,9 @@ function findDuplicateCase(records: CaseRecord[], candidate: CaseRecord): CaseRe
   return records.find((record) =>
     record.status !== "killed" &&
     normalizeMatchText(record.title) === title &&
-    scopeFieldMatches(record.target, candidate.target) &&
-    scopeFieldMatches(record.endpoint, candidate.endpoint) &&
-    scopeFieldMatches(record.bugClass, candidate.bugClass)
+    normalizeMatchText(record.target) === normalizeMatchText(candidate.target) &&
+    normalizeMatchText(record.endpoint) === normalizeMatchText(candidate.endpoint) &&
+    normalizeMatchText(record.bugClass) === normalizeMatchText(candidate.bugClass)
   );
 }
 
@@ -316,7 +284,7 @@ async function acquireLedgerLock(): Promise<() => Promise<void>> {
         await rm(lockPath, { force: true });
       };
     } catch (error: unknown) {
-      if (isNodeError(error) && error.code !== "EEXIST") throw error;
+      if ((error as any)?.code !== "EEXIST") throw error;
 
       try {
         const info = await stat(lockPath);
@@ -537,7 +505,7 @@ export async function readCasefile(): Promise<CaseRecord[]> {
     }
     return Array.from(recordsMap.values());
   } catch (error: unknown) {
-    if (isNodeError(error) && error.code === "ENOENT") return [];
+    if ((error as any)?.code === "ENOENT") return [];
     throw error;
   }
 }
@@ -800,18 +768,12 @@ function caseHaystack(
     if (Array.isArray(val)) return val.join(" ").toLowerCase();
     return (typeof val === "string" ? val : String(val ?? "")).toLowerCase();
   }
-  const parts: string[] = [];
-  for (const key of ALL_TEXT_FIELDS) {
-    const val = record[key];
-    if (Array.isArray(val)) parts.push((val as string[]).join(" "));
-    else if (typeof val === "string") parts.push(val);
-  }
-  parts.push(...(record.blockers ?? []));
-  parts.push(...(record.tags ?? []));
-  parts.push(...(record.references ?? []));
-  parts.push(...(record.assumptions ?? []));
-  parts.push(...(record.linkedCaseIds ?? []));
-  return parts.filter(Boolean).join("\n").toLowerCase();
+  return Object.entries(record)
+    .filter(([k]) => !["id", "createdAt", "updatedAt", "reportedAt", "reportPath"].includes(k))
+    .map(([, v]) => (Array.isArray(v) ? v.join(" ") : String(v ?? "")))
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
 }
 
 export async function searchCases(
