@@ -8,7 +8,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import { Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 import {
