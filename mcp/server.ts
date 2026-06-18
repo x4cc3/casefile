@@ -87,7 +87,7 @@ async function runTool(
 export function createCasefileMcpServer(): McpServer {
   const server = new McpServer({
     name: "casefile",
-    version: "1.3.5",
+    version: "1.3.6",
   });
 
   server.registerTool(
