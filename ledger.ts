@@ -29,7 +29,6 @@ export const PRIORITY_VALUES = ["P0", "P1", "P2", "P3", "P4"] as const;
 export type CasePriority = (typeof PRIORITY_VALUES)[number];
 
 export const SEARCH_FIELD_VALUES = ["title", "summary", "evidence", "impact", "target", "endpoint", "bugClass", "poc"] as const;
-export type CaseSearchField = (typeof SEARCH_FIELD_VALUES)[number];
 
 export type CaseRecord = {
   id: string;
@@ -57,7 +56,7 @@ export type CaseRecord = {
   updatedAt: string;
 };
 
-export type CaseInput = {
+type CaseInput = {
   title: string;
   status?: CaseStatus;
   confidence?: CaseConfidence;
@@ -82,30 +81,32 @@ type NormalizedCaseInput = Partial<CaseInput> & {
   linkedCaseIds?: string[];
 };
 
-export type CaseUpdate = Partial<CaseInput>;
+type CaseUpdate = Partial<CaseInput>;
 
-export type CaseUpdateResult = {
+type CaseUpdateResult = {
   record: CaseRecord;
   changed: boolean;
   reason?: string;
 };
 
-export type CaseAddResult = {
+type CaseAddResult = {
   record: CaseRecord;
   created: boolean;
   reason?: string;
 };
 
-export type CaseLinkResult = {
+type CaseLinkResult = {
   source: CaseRecord;
   target: CaseRecord;
   changed: boolean;
   reason?: string;
 };
 
-export type CaseSearchOptions = {
+type CaseSearchField = (typeof SEARCH_FIELD_VALUES)[number];
+
+type CaseSearchOptions = {
   query?: string;
-  field?: "title" | "summary" | "evidence" | "impact" | "target" | "endpoint" | "bugClass" | "poc";
+  field?: CaseSearchField;
   status?: CaseStatus;
   confidence?: CaseConfidence;
   severity?: CaseSeverity;
@@ -283,7 +284,7 @@ export function getCasefilePath(): string {
   return join(detectWorkspaceRoot(), projectDir, "casefile.jsonl");
 }
 
-export function getCasefileReportDir(): string {
+function getCasefileReportDir(): string {
   return join(dirname(getCasefilePath()), "report");
 }
 
@@ -368,13 +369,82 @@ function validateCase(record: CaseRecord): void {
   }
 }
 
+// ── State-machine transition gate ─────────────────────────────────────
+// Enforces the cyber-workflow pipeline on status *changes*. Field-only
+// updates (no status change) skip this gate. Killed/reported are terminal.
+// Per-target-state field gates remain in validateCase; this only checks the
+// transition itself and the fields the caller provided on this step.
+//
+// ponytail: required fields are checked on the update delta, not the merged
+// record — promotion must re-assert evidence at the promotion call. This is
+// stricter than checking inherited values but makes the gate deterministic
+// (confidence always has a default, so checking the merged record could never
+// fail). Upgrade path: none, this is the intended shape.
+function validateTransition(from: CaseStatus, to: CaseStatus, update: CaseUpdate): void {
+  if (from === to) return; // no-op status restatement is handled by material-equality check
+
+  // Terminal states are immutable.
+  if (from === "killed") {
+    throw new Error(`Cannot revive a killed case; open a new case if the lead is revived (was ${from} → ${to})`);
+  }
+  if (from === "reported") {
+    throw new Error(`Cannot mutate a reported case; file a follow-up case instead (was ${from} → ${to})`);
+  }
+
+  // killed is reachable from anywhere; validateCase already enforces its supporting fields.
+  if (to === "killed") return;
+  // blocked is reachable from any non-terminal state; validateCase enforces blockers[].
+  if (to === "blocked") return;
+
+  type Rule = (u: CaseUpdate) => string | null;
+  const transitions: Partial<Record<CaseStatus, Partial<Record<CaseStatus, Rule>>>> = {
+    hypothesis: {
+      investigating: (u) =>
+        !u.evidence ? "INVESTIGATING requires evidence (source→sink trace)" :
+        !u.confidence ? "INVESTIGATING requires confidence level" :
+        null,
+      confirmed: () => "Cannot jump hypothesis → confirmed; promote to investigating first",
+      reported: () => "Cannot jump hypothesis → reported; confirm first",
+      // hypothesis → blocked handled by validateCase
+    },
+    investigating: {
+      confirmed: (u) =>
+        !u.poc ? "CONFIRMED requires poc (PoC exploit code)" :
+        !u.evidence ? "CONFIRMED requires evidence (PoC output, exit code)" :
+        !u.impact ? "CONFIRMED requires impact (technical + real-world)" :
+        !u.severity ? "CONFIRMED requires severity rating" :
+        null,
+      hypothesis: () => null, // downgrade allowed
+      // investigating → blocked handled by validateCase
+    },
+    confirmed: {
+      reported: () => null,
+      investigating: () => null, // rework allowed
+      // confirmed → blocked handled by validateCase
+    },
+  };
+
+  const rule = transitions[from]?.[to];
+  if (rule === undefined) {
+    throw new Error(`Invalid transition: ${from} → ${to}`);
+  }
+  const reason = rule(update);
+  if (reason) {
+    throw new Error(`Cannot transition ${from} → ${to}: ${reason}`);
+  }
+}
+
 function validateNewCaseInput(input: CaseInput): void {
   if (input.status && input.status !== "hypothesis" && input.status !== "investigating") {
     throw new Error("New cases must start as hypothesis or investigating; promote with CaseUpdate after validation");
   }
 }
 
-function normalizeCase(
+// ponytail: buildRecord/normalizeCase split exists so updateCaseResult can run
+// validateTransition before validateCase — transition errors are more
+// actionable than the generic target-state field errors. Upgrade path: none,
+// this is the intended shape.
+function buildRecord(
   input: NormalizedCaseInput,
   existing?: CaseRecord,
 ): CaseRecord {
@@ -384,7 +454,7 @@ function normalizeCase(
     existing?.id ??
     `case_${stableShortId(`${title}\n${timestamp}\n${randomUUID()}`)}`;
 
-  const record = {
+  return {
     id,
     title,
     status: input.status ?? existing?.status ?? "hypothesis",
@@ -410,6 +480,13 @@ function normalizeCase(
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
+}
+
+function normalizeCase(
+  input: NormalizedCaseInput,
+  existing?: CaseRecord,
+): CaseRecord {
+  const record = buildRecord(input, existing);
   validateCase(record);
   return record;
 }
@@ -493,7 +570,7 @@ export async function updateCaseResult(
     if (!current) {
       throw new Error(`Case not found: ${id}`);
     }
-    const next = normalizeCase(
+    const next = buildRecord(
       {
         ...(hasDefined(update, "title") ? { title: update.title } : {}),
         status: update.status ?? current.status,
@@ -518,6 +595,14 @@ export async function updateCaseResult(
       current,
     );
 
+    // Enforce the state-machine transition before field gates so the model
+    // sees the actionable transition reason (e.g. "requires poc, evidence,
+    // impact, severity") rather than the generic validateCase message.
+    if (update.status && update.status !== current.status) {
+      validateTransition(current.status, next.status, update);
+    }
+    validateCase(next);
+
     if (casesMateriallyEqual(current, next)) {
       return { record: current, changed: false, reason: noChangeReason(current, update) };
     }
@@ -536,34 +621,6 @@ export async function updateCaseResult(
     await mkdir(dirname(ledgerPath), { recursive: true });
     await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
     return { record: next, changed: true };
-  });
-}
-
-export async function updateCase(
-  id: string,
-  update: CaseUpdate,
-): Promise<CaseRecord> {
-  const result = await updateCaseResult(id, update);
-  return result.record;
-}
-
-// ── Delete (full rewrite — removes record + cleans dangling refs) ────
-
-export async function deleteCase(id: string): Promise<CaseRecord> {
-  return withLedgerMutation(async () => {
-    const records = await readCasefile();
-    const index = records.findIndex((r) => r.id === id);
-    if (index === -1) {
-      throw new Error(`Case not found: ${id}`);
-    }
-    const [removed] = records.splice(index, 1);
-    for (const record of records) {
-      if (record.linkedCaseIds.includes(id)) {
-        record.linkedCaseIds = record.linkedCaseIds.filter((lid) => lid !== id);
-      }
-    }
-    await writeCasefile(records);
-    return removed;
   });
 }
 
@@ -652,7 +709,7 @@ export async function unlinkCasesResult(
 
 function caseHaystack(
   record: CaseRecord,
-  field?: CaseSearchOptions["field"],
+  field?: CaseSearchField,
 ): string {
   if (field) {
     const val = record[field];

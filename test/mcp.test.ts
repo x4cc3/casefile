@@ -72,6 +72,8 @@ describe("casefile MCP server", () => {
           confidence: "high",
           severity: "high",
           poc: "Request the fetch endpoint with a collaborator URL and observe the callback",
+          impact: "Server-side request forgery to internal services",
+          evidence: "Backend fetches user-provided URLs",
         },
       });
       expect((updated.structuredContent as any).record.status).toBe("confirmed");
