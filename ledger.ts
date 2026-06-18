@@ -52,7 +52,7 @@ export type CaseRecord = {
   /** Explicit assumptions or unknowns to avoid overstating exploitability. */
   assumptions?: string[];
   /** Verification of an on-disk PoC run (set only by promoteFindingResult). */
-  pocVerified?: { path: string; exitCode: number; ranAt: string; output?: string };
+  pocVerified?: { path: string; exitCode: number; ranAt: string; output?: string; sandbox: boolean };
   /** ISO timestamp when CaseReport first wrote the markdown report. */
   reportedAt?: string;
   /** Path to the generated markdown report (set only by writeCaseReport). */
@@ -622,6 +622,7 @@ export type PocVerification = {
   exitCode: number;
   ranAt: string;
   output?: string;
+  sandbox: boolean;
 };
 
 /**

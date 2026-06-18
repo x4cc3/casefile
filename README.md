@@ -19,12 +19,12 @@ Track durable security cases during bug bounties, CTFs, and security audits.
 | **CaseLink** / **Unlink** | `casefile_link` / `_unlink` | Connect primitives into exploit chains |
 | **CaseReport** | `casefile_report` | Generate markdown report (confirmed/reported only) |
 
-## PoC Runner (Docker)
+## PoC Runner (Docker / Local)
 
 To promote a case from `investigating` to `confirmed`, you must use `PromoteFinding` with an on-disk PoC path.
 
-- **Isolation**: Runs in a `--network none` sandbox with read-only mounts.
-- **Runtime**: Uses `python:3.12-slim` for `.py` or `alpine` for `.sh`.
+- **Sandbox (Docker)**: Default. Runs in a `--network none` container with read-only mounts. Uses `python:3.12-slim` (.py) or `alpine` (.sh).
+- **Local**: Use `local: true`. Runs directly on the host (e.g. for network-dependent bugs).
 - **Verification**: Only promotes to `confirmed` if the PoC returns **exit code 0**.
 - **Timeout**: 30 second limit.
 
@@ -32,7 +32,7 @@ To promote a case from `investigating` to `confirmed`, you must use `PromoteFind
 
 1. **Hypothesize**: `CaseAdd(status: hypothesis)`
 2. **Investigate**: `CaseUpdate(status: investigating, evidence, confidence)`
-3. **Confirm**: `PromoteFinding(id, poc_path)` -> Exit 0 verifies and confirms.
+3. **Confirm**: `PromoteFinding(id, poc_path, local?)` -> Exit 0 verifies and confirms.
 4. **Chain**: `CaseLink` primitives to escalations.
 5. **Report**: `CaseReport` -> `CaseUpdate(status: reported)`.
 6. **Kill**: `CaseUpdate(status: killed)` for dead ends.
