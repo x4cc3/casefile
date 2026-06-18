@@ -147,6 +147,8 @@ describe("casefile ledger", () => {
       confidence: "high",
       severity: "high",
       poc: "Request /exports/123 as another user",
+      impact: "Unauthorized file disclosure",
+      evidence: "Observed sequential IDs",
     });
     expect(updated.changed).toBe(true);
     expect(updated.record).toMatchObject({
@@ -218,7 +220,7 @@ describe("casefile ledger", () => {
     });
     await expect(updateCaseResult(weakLead.id, { status: "confirmed" }))
       .rejects
-      .toThrow("Confirmed cases require both evidence and poc");
+      .toThrow("CONFIRMED requires poc");
 
     const terminalLead = await addCase({
       title: "Terminal-state validation",
@@ -330,7 +332,13 @@ describe("casefile ledger", () => {
       poc: "<img src=x onerror=alert(1)>",
       tags: ["xss"],
     });
-    await updateCaseResult(storedXss.id, { status: "confirmed" });
+    await updateCaseResult(storedXss.id, {
+      status: "confirmed",
+      evidence: "Payload persists in case notes",
+      poc: "<img src=x onerror=alert(1)>",
+      impact: "Stored XSS execution in victim browser",
+      severity: "high",
+    });
 
     const graphql = await searchCases({ query: "adminMutation", field: "evidence" });
     expect(graphql.total).toBe(1);
@@ -359,7 +367,13 @@ describe("casefile ledger", () => {
       remediation: "Invalidate all outstanding reset tokens after first use",
       references: ["https://example.test/advisory"],
     });
-    await updateCaseResult(record.id, { status: "confirmed" });
+    await updateCaseResult(record.id, {
+      status: "confirmed",
+      evidence: "Reset token remains valid after password change",
+      poc: "Request two reset links, use both successfully",
+      impact: "Attacker can retain account access",
+      severity: "critical",
+    });
 
     const report = await writeCaseReport(record.id);
     expect(report.path).toMatch(/account-takeover-through-reset-token-reuse-case_[a-f0-9]{10}\.md$/);
@@ -391,5 +405,115 @@ describe("casefile ledger", () => {
 
     await writeFile(ledgerPath, "{\"id\":\"case_valid\"}\n\nnot-json\n", "utf8");
     await expect(readCasefile()).rejects.toThrow("Invalid casefile JSON at line 3");
+  });
+
+  describe("state transitions", () => {
+    test("hypothesis → investigating requires evidence", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      await expect(
+        updateCaseResult(r.id, { status: "investigating", confidence: "low" }),
+      ).rejects.toThrow(/INVESTIGATING requires evidence/);
+    });
+
+    test("hypothesis → investigating requires confidence", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      await expect(
+        updateCaseResult(r.id, { status: "investigating", evidence: "src→sink" }),
+      ).rejects.toThrow(/INVESTIGATING requires confidence/);
+    });
+
+    test("hypothesis → investigating succeeds with evidence+confidence", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      const out = await updateCaseResult(r.id, {
+        status: "investigating",
+        evidence: "src→sink",
+        confidence: "medium",
+      });
+      expect(out.record.status).toBe("investigating");
+      expect(out.changed).toBe(true);
+    });
+
+    test("hypothesis → confirmed is rejected", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      await expect(
+        updateCaseResult(r.id, {
+          status: "confirmed",
+          evidence: "x",
+          poc: "x",
+          impact: "x",
+          severity: "high",
+        }),
+      ).rejects.toThrow(/Cannot jump hypothesis → confirmed/);
+    });
+
+    test("hypothesis → reported is rejected", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      await expect(
+        updateCaseResult(r.id, { status: "reported", remediation: "fix" }),
+      ).rejects.toThrow(/Cannot jump hypothesis → reported/);
+    });
+
+    test("investigating → confirmed requires all four fields", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
+      await expect(updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i" })).rejects.toThrow(/severity/);
+      await expect(updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", severity: "high" })).rejects.toThrow(/impact/);
+      await expect(updateCaseResult(r.id, { status: "confirmed", poc: "p", impact: "i", severity: "high" })).rejects.toThrow(/evidence/);
+      await expect(updateCaseResult(r.id, { status: "confirmed", evidence: "e", impact: "i", severity: "high" })).rejects.toThrow(/poc/);
+    });
+
+    test("investigating → confirmed succeeds with all four fields", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
+      const out = await updateCaseResult(r.id, {
+        status: "confirmed",
+        poc: "poc script",
+        evidence: "exit code 0",
+        impact: "rce",
+        severity: "critical",
+      });
+      expect(out.record.status).toBe("confirmed");
+    });
+
+    test("killed is terminal", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
+      await updateCaseResult(r.id, { status: "killed", assumptions: ["no path"] });
+      await expect(
+        updateCaseResult(r.id, { status: "investigating", evidence: "x2" }),
+      ).rejects.toThrow(/Cannot revive a killed case/);
+    });
+
+    test("reported is terminal", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
+      await updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i", severity: "high" });
+      await updateCaseResult(r.id, { status: "reported", remediation: "fix" });
+      await expect(
+        updateCaseResult(r.id, { status: "investigating" }),
+      ).rejects.toThrow(/Cannot mutate a reported case/);
+    });
+
+    test("hypothesis → killed is allowed without prior investigating", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      const out = await updateCaseResult(r.id, { status: "killed", assumptions: ["spec-compliant"] });
+      expect(out.record.status).toBe("killed");
+    });
+
+    test("field-only update without status change is not gated", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      const out = await updateCaseResult(r.id, { evidence: "enriching without promoting" });
+      expect(out.changed).toBe(true);
+      expect(out.record.status).toBe("hypothesis");
+    });
+
+    test("confirmed → investigating rework is allowed", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
+      await updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i", severity: "high" });
+      const out = await updateCaseResult(r.id, { status: "investigating" });
+      expect(out.record.status).toBe("investigating");
+    });
+
+    test("investigating → hypothesis downgrade is allowed", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
+      const out = await updateCaseResult(r.id, { status: "hypothesis" });
+      expect(out.record.status).toBe("hypothesis");
+    });
   });
 });

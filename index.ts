@@ -21,6 +21,7 @@ import {
   CONFIDENCE_VALUES,
   SEVERITY_VALUES,
   PRIORITY_VALUES,
+  SEARCH_FIELD_VALUES,
   addCaseResult,
   updateCaseResult,
   searchCases,
@@ -113,7 +114,7 @@ const SearchSchema = Type.Object(
   {
     query: Type.String({ description: "Text to search across cases" }),
     field: Type.Optional(
-      StringEnum(["title", "summary", "evidence", "impact", "target", "endpoint", "bugClass", "poc"] as const, {
+      StringEnum(SEARCH_FIELD_VALUES, {
         description: "Restrict search to a specific field",
       }),
     ),
@@ -208,8 +209,6 @@ class CasefileDashboard {
   private records: CaseRecord[];
   private theme: Theme;
   private onClose: () => void;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
 
   constructor(records: CaseRecord[], theme: any, onClose: () => void) {
     this.records = records;
@@ -224,9 +223,6 @@ class CasefileDashboard {
   }
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
     const th = this.theme;
     const lines: string[] = [];
     const title = th.fg("accent", ` Casefile (${this.records.length}) `);
@@ -250,16 +246,12 @@ class CasefileDashboard {
     lines.push("");
     lines.push(truncateToWidth(`  ${th.fg("dim", "Press Escape to close")}`, width));
     lines.push("");
-
-    this.cachedWidth = width;
-    this.cachedLines = lines;
     return lines;
   }
 
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-  }
+  // ponytail: invalidate is a Component-interface no-op; render is stateless
+  // so there's nothing to clear. TUI calls this on theme reload.
+  invalidate(): void {}
 }
 
 // ── Context injection ─────────────────────────────────────────────────

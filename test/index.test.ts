@@ -138,7 +138,10 @@ describe("casefile extension", () => {
       id: record.id,
       status: "confirmed",
       confidence: "high",
+      severity: "medium",
       poc: "Fetch /download?id=42 with a different session",
+      impact: "Unauthorized access to other users' files",
+      evidence: "download?id=42 returns another user's file",
     });
     expect(updated.details.changed).toBe(true);
     expect(updated.details.record.status).toBe("confirmed");
@@ -250,11 +253,24 @@ describe("casefile extension", () => {
     const reported = await executeTool(pi, "CaseAdd", {
       title: "Already reported",
       status: "investigating",
+      evidence: "Resolved finding",
+      poc: "Reproduced before patch",
+      impact: "Was exploitable",
+      severity: "high",
       remediation: "Patch shipped",
     });
     await executeTool(pi, "CaseUpdate", {
       id: reported.details.record.id,
+      status: "confirmed",
+      evidence: "Resolved finding",
+      poc: "Reproduced before patch",
+      impact: "Was exploitable",
+      severity: "high",
+    });
+    await executeTool(pi, "CaseUpdate", {
+      id: reported.details.record.id,
       status: "reported",
+      remediation: "Patch shipped",
     });
 
     const handler = pi.events.get("before_agent_start")?.[0];
@@ -309,6 +325,9 @@ describe("casefile extension", () => {
       id: storedXss.details.record.id,
       status: "confirmed",
       poc: "Render a note containing <img src=x onerror=alert(1)> and observe execution",
+      evidence: "Payload renders in notes",
+      impact: "Script execution in victim browser",
+      severity: "high",
     });
 
     const notifications: string[] = [];
