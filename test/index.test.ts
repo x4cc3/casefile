@@ -35,6 +35,10 @@ mock.module("@earendil-works/pi-tui", () => ({
   truncateToWidth: (value: string, width: number) => value.slice(0, width),
 }));
 
+mock.module("../poc-runner.js", () => ({
+  runPoc: () => ({ path: "/mock/poc.sh", exitCode: 0, output: "ok", ranAt: "2024-01-01T00:00:00Z" }),
+}));
+
 type FakePi = {
   tools: Map<string, any>;
   commands: Map<string, any>;
@@ -95,6 +99,7 @@ describe("casefile extension", () => {
       "CaseSearch",
       "CaseUnlink",
       "CaseUpdate",
+      "PromoteFinding",
     ]);
     expect([...pi.commands.keys()]).toEqual(["casefile"]);
     expect(pi.events.has("session_start")).toBe(true);
@@ -136,7 +141,6 @@ describe("casefile extension", () => {
 
     const updated = await executeTool(pi, "CaseUpdate", {
       id: record.id,
-      status: "confirmed",
       confidence: "high",
       severity: "medium",
       poc: "Fetch /download?id=42 with a different session",
@@ -144,8 +148,13 @@ describe("casefile extension", () => {
       evidence: "download?id=42 returns another user's file",
     });
     expect(updated.details.changed).toBe(true);
-    expect(updated.details.record.status).toBe("confirmed");
-    expect(updated.details.record.poc).toContain("different session");
+
+    const promoted = await executeTool(pi, "PromoteFinding", {
+      id: record.id,
+      poc_path: "/mock/poc.sh",
+    });
+    expect(promoted.details.record.status).toBe("confirmed");
+    expect(promoted.details.record.pocVerified?.exitCode).toBe(0);
 
     const listed = await executeTool(pi, "CaseList", { status: "confirmed" });
     expect(listed.details.total).toBe(1);
@@ -239,11 +248,14 @@ describe("casefile extension", () => {
       status: "investigating",
       summary: "This should not be injected",
       evidence: "Observed suspicious response",
+      confidence: "low",
       nextStep: "Test <payload> safely",
     });
     const killed = await executeTool(pi, "CaseAdd", {
       title: "Killed duplicate",
       status: "investigating",
+      evidence: "Duplicate",
+      confidence: "low",
     });
     await executeTool(pi, "CaseUpdate", {
       id: killed.details.record.id,
@@ -254,19 +266,17 @@ describe("casefile extension", () => {
       title: "Already reported",
       status: "investigating",
       evidence: "Resolved finding",
+      confidence: "high",
       poc: "Reproduced before patch",
       impact: "Was exploitable",
       severity: "high",
       remediation: "Patch shipped",
     });
-    await executeTool(pi, "CaseUpdate", {
+    await executeTool(pi, "PromoteFinding", {
       id: reported.details.record.id,
-      status: "confirmed",
-      evidence: "Resolved finding",
-      poc: "Reproduced before patch",
-      impact: "Was exploitable",
-      severity: "high",
+      poc_path: "/mock/poc.sh",
     });
+    await executeTool(pi, "CaseReport", { id: reported.details.record.id });
     await executeTool(pi, "CaseUpdate", {
       id: reported.details.record.id,
       status: "reported",
@@ -298,6 +308,8 @@ describe("casefile extension", () => {
     const blocked = await executeTool(pi, "CaseAdd", {
       title: "Blocked lead",
       status: "investigating",
+      evidence: "Need env access",
+      confidence: "low",
     });
     await executeTool(pi, "CaseUpdate", {
       id: blocked.details.record.id,
@@ -320,14 +332,14 @@ describe("casefile extension", () => {
       title: "Stored XSS",
       status: "investigating",
       evidence: "Payload renders in notes",
-    });
-    await executeTool(pi, "CaseUpdate", {
-      id: storedXss.details.record.id,
-      status: "confirmed",
+      confidence: "high",
       poc: "Render a note containing <img src=x onerror=alert(1)> and observe execution",
-      evidence: "Payload renders in notes",
       impact: "Script execution in victim browser",
       severity: "high",
+    });
+    await executeTool(pi, "PromoteFinding", {
+      id: storedXss.details.record.id,
+      poc_path: "/mock/poc.sh",
     });
 
     const notifications: string[] = [];

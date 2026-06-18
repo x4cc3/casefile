@@ -24,6 +24,7 @@ import {
   SEARCH_FIELD_VALUES,
   addCaseResult,
   updateCaseResult,
+  promoteFindingResult,
   searchCases,
   countCases,
   linkCasesResult,
@@ -35,6 +36,7 @@ import {
   readCasefile,
   writeCaseReport,
 } from "./ledger.js";
+import { runPoc } from "./poc-runner.js";
 
 // ── Schemas ───────────────────────────────────────────────────────────
 
@@ -80,6 +82,16 @@ const UpdateSchema = Type.Object(
     id: Type.String({ description: "Case ID to update" }),
     title: Type.Optional(Type.String()),
     ...CommonFields,
+  },
+  { additionalProperties: false },
+);
+
+// ── Tool: PromoteFinding ─────────────────────────────────────────────
+
+const PromoteSchema = Type.Object(
+  {
+    id: Type.String({ description: "Case ID to promote" }),
+    poc_path: Type.String({ description: "Absolute path to the PoC script on disk" }),
   },
   { additionalProperties: false },
 );
@@ -390,6 +402,8 @@ export default function casefileExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use CaseUpdate when new evidence, status changes, confidence updates, or blockers change for an existing case.",
       "Promote from 'hypothesis' → 'investigating' when you start actively testing, 'investigating' → 'confirmed' when you have proof.",
+      "investigating → confirmed is enforced: you cannot set status='confirmed' directly. Use the PromoteFinding tool to run the PoC in a sandbox; it will promote the case only on exit 0.",
+      "confirmed → reported is enforced: run CaseReport first, then update status to reported.",
       "Only set status='confirmed' after a real repro, test run, exploit run, or equivalent validation. Put the observation in evidence and the exact proof/repro in poc.",
       "Do not call CaseUpdate solely to restate the current status. If a case is already confirmed, only update it for materially new evidence, impact, PoC, remediation, links, or a real status change such as reported/blocked/killed.",
     ],
@@ -435,6 +449,67 @@ export default function casefileExtension(pi: ExtensionAPI) {
         line += "\n" + theme.fg("dim", unchanged ? `  unchanged: ${details.reason ?? "no material changes"}` : `  ${c.id} [${c.status}/${c.confidence}]`);
       }
       return new Text(line, 0, 0);
+    },
+  });
+
+  // ── Tool: PromoteFinding ──
+
+  pi.registerTool({
+    name: "PromoteFinding",
+    label: "Promote Finding",
+    description:
+      "Run an on-disk PoC in an isolated docker sandbox and, on exit 0, promote an investigating case to confirmed.",
+    promptSnippet: "Run a PoC and promote an investigating case to confirmed",
+    promptGuidelines: [
+      "Use PromoteFinding when an investigating case has a concrete PoC script on disk and you are ready to prove it.",
+      "The case must already have status='investigating' and non-empty poc, evidence, impact, and severity fields.",
+      "The PoC runs in `docker run --rm --network none`. Only exit code 0 promotes the case to confirmed.",
+      "Do not use CaseUpdate to set status='confirmed' directly — it is rejected. Always use PromoteFinding.",
+    ],
+    parameters: PromoteSchema,
+
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      const run = runPoc(params.poc_path);
+      const result = await promoteFindingResult(params.id, {
+        path: run.path,
+        exitCode: run.exitCode,
+        ranAt: run.ranAt,
+        output: run.output,
+      });
+      const record = result.record;
+      return {
+        content: [
+          {
+            type: "text",
+            text: run.exitCode === 0
+              ? `PoC verified (exit ${run.exitCode}). Case promoted to confirmed:\n${formatCaseDetail(record)}`
+              : `PoC failed (exit ${run.exitCode}). Case remains investigating.\nOutput:\n${run.output}`,
+          },
+        ],
+        details: { record, run },
+      };
+    },
+
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("PromoteFinding ")) + theme.fg("dim", args.id),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, _options, theme) {
+      const details = result.details as { record?: CaseRecord; run?: { exitCode: number } } | undefined;
+      if (!details?.record) {
+        const text = result.content[0];
+        return new Text(text?.type === "text" ? text.text : "Promoted", 0, 0);
+      }
+      const success = details.run?.exitCode === 0;
+      return new Text(
+        theme.fg(success ? "success" : "warning", success ? "✓ " : "✗ ") + renderOneLine(details.record, theme),
+        0,
+        0,
+      );
     },
   });
 
