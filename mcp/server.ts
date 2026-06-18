@@ -87,7 +87,7 @@ async function runTool(
 export function createCasefileMcpServer(): McpServer {
   const server = new McpServer({
     name: "casefile",
-    version: "1.3.5",
+    version: "1.3.6",
   });
 
   server.registerTool(
@@ -146,10 +146,11 @@ export function createCasefileMcpServer(): McpServer {
     "casefile_promote",
     {
       title: "Promote Finding",
-      description: "Run an on-disk PoC in an isolated docker sandbox and, on exit 0, promote an investigating case to confirmed.",
+      description: "Run an on-disk PoC script (Docker sandbox or local) and, on exit 0, promote an investigating case to confirmed.",
       inputSchema: {
         id: z.string().describe("Case ID to promote"),
         poc_path: z.string().describe("Absolute path to the PoC script on disk"),
+        local: z.boolean().optional().describe("Run locally instead of in Docker sandbox"),
       },
       annotations: {
         readOnlyHint: false,
@@ -159,12 +160,13 @@ export function createCasefileMcpServer(): McpServer {
       },
     },
     async (params) => runTool(async () => {
-      const run = runPoc(params.poc_path);
+      const run = runPoc(params.poc_path, params.local !== true);
       const result = await promoteFindingResult(params.id, {
         path: run.path,
         exitCode: run.exitCode,
         ranAt: run.ranAt,
         output: run.output,
+        sandbox: run.sandbox,
       });
       const text = run.exitCode === 0
         ? `PoC verified (exit ${run.exitCode}). Case promoted to confirmed:\n${formatCaseDetail(result.record)}`

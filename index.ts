@@ -92,6 +92,7 @@ const PromoteSchema = Type.Object(
   {
     id: Type.String({ description: "Case ID to promote" }),
     poc_path: Type.String({ description: "Absolute path to the PoC script on disk" }),
+    local: Type.Optional(Type.Boolean({ description: "Run locally instead of in Docker sandbox" })),
   },
   { additionalProperties: false },
 );
@@ -458,23 +459,25 @@ export default function casefileExtension(pi: ExtensionAPI) {
     name: "PromoteFinding",
     label: "Promote Finding",
     description:
-      "Run an on-disk PoC in an isolated docker sandbox and, on exit 0, promote an investigating case to confirmed.",
+      "Run an on-disk PoC script (Docker sandbox or local) and, on exit 0, promote an investigating case to confirmed.",
     promptSnippet: "Run a PoC and promote an investigating case to confirmed",
     promptGuidelines: [
       "Use PromoteFinding when an investigating case has a concrete PoC script on disk and you are ready to prove it.",
       "The case must already have status='investigating' and non-empty poc, evidence, impact, and severity fields.",
-      "The PoC runs in `docker run --rm --network none`. Only exit code 0 promotes the case to confirmed.",
+      "By default, the PoC runs in `docker run --rm --network none`. Use local:true to run on the host (e.g. for network-dependent bugs).",
+      "Only exit code 0 promotes the case to confirmed.",
       "Do not use CaseUpdate to set status='confirmed' directly — it is rejected. Always use PromoteFinding.",
     ],
     parameters: PromoteSchema,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
-      const run = runPoc(params.poc_path);
+      const run = runPoc(params.poc_path, params.local !== true);
       const result = await promoteFindingResult(params.id, {
         path: run.path,
         exitCode: run.exitCode,
         ranAt: run.ranAt,
         output: run.output,
+        sandbox: run.sandbox,
       });
       const record = result.record;
       return {
