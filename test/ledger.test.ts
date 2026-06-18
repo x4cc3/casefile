@@ -9,6 +9,7 @@ import {
   getCasefilePath,
   linkCases,
   linkCasesResult,
+  promoteFindingResult,
   readCasefile,
   searchCases,
   setCasefilePath,
@@ -140,10 +141,10 @@ describe("casefile ledger", () => {
       title: "IDOR in export",
       status: "investigating",
       evidence: "Observed sequential IDs",
+      confidence: "medium",
     });
 
     const updated = await updateCaseResult(record.id, {
-      status: "confirmed",
       confidence: "high",
       severity: "high",
       poc: "Request /exports/123 as another user",
@@ -151,7 +152,14 @@ describe("casefile ledger", () => {
       evidence: "Observed sequential IDs",
     });
     expect(updated.changed).toBe(true);
-    expect(updated.record).toMatchObject({
+
+    const promoted = await promoteFindingResult(record.id, {
+      path: "/workspace/idor-poc.py",
+      exitCode: 0,
+      ranAt: "2024-01-01T00:00:00Z",
+    });
+    expect(updated.changed).toBe(true);
+    expect(promoted.record).toMatchObject({
       status: "confirmed",
       confidence: "high",
       severity: "high",
@@ -162,7 +170,7 @@ describe("casefile ledger", () => {
     expect(noOp.reason).toContain("already confirmed");
 
     const raw = await readFile(ledgerPath, "utf8");
-    expect(raw.trim().split("\n")).toHaveLength(2);
+    expect(raw.trim().split("\n")).toHaveLength(3);
     expect(await readCasefile()).toHaveLength(1);
   });
 
@@ -217,14 +225,15 @@ describe("casefile ledger", () => {
       title: "Code review only SSRF",
       status: "investigating",
       evidence: "URL is fetched after hostname validation",
+      confidence: "medium",
     });
     await expect(updateCaseResult(weakLead.id, { status: "confirmed" }))
       .rejects
-      .toThrow("CONFIRMED requires poc");
+      .toThrow(/promote_finding/);
 
     const terminalLead = await addCase({
       title: "Terminal-state validation",
-      status: "investigating",
+      status: "hypothesis",
     });
 
     await expect(updateCaseResult(terminalLead.id, { status: "blocked" }))
@@ -238,6 +247,8 @@ describe("casefile ledger", () => {
     const duplicateLead = await addCase({
       title: "Duplicate lead",
       status: "investigating",
+      evidence: "e",
+      confidence: "low",
     });
     await expect(updateCaseResult(duplicateLead.id, {
       status: "killed",
@@ -322,6 +333,7 @@ describe("casefile ledger", () => {
       target: "api.example.test",
       summary: "GraphQL schema is exposed",
       evidence: "Schema exposes adminMutation",
+      confidence: "medium",
       tags: ["graphql"],
     });
     const storedXss = await addCase({
@@ -330,14 +342,14 @@ describe("casefile ledger", () => {
       severity: "high",
       evidence: "Payload persists in case notes",
       poc: "<img src=x onerror=alert(1)>",
+      impact: "Stored XSS execution in victim browser",
+      confidence: "high",
       tags: ["xss"],
     });
-    await updateCaseResult(storedXss.id, {
-      status: "confirmed",
-      evidence: "Payload persists in case notes",
-      poc: "<img src=x onerror=alert(1)>",
-      impact: "Stored XSS execution in victim browser",
-      severity: "high",
+    await promoteFindingResult(storedXss.id, {
+      path: "/workspace/stored-xss-poc.py",
+      exitCode: 0,
+      ranAt: "2024-01-01T00:00:00Z",
     });
 
     const graphql = await searchCases({ query: "adminMutation", field: "evidence" });
@@ -367,12 +379,10 @@ describe("casefile ledger", () => {
       remediation: "Invalidate all outstanding reset tokens after first use",
       references: ["https://example.test/advisory"],
     });
-    await updateCaseResult(record.id, {
-      status: "confirmed",
-      evidence: "Reset token remains valid after password change",
-      poc: "Request two reset links, use both successfully",
-      impact: "Attacker can retain account access",
-      severity: "critical",
+    await promoteFindingResult(record.id, {
+      path: "/workspace/reset-token-poc.py",
+      exitCode: 0,
+      ranAt: "2024-01-01T00:00:00Z",
     });
 
     const report = await writeCaseReport(record.id);
@@ -393,6 +403,7 @@ describe("casefile ledger", () => {
       title: "Needs validation",
       status: "investigating",
       evidence: "Static review only",
+      confidence: "low",
     });
 
     await expect(writeCaseReport(record.id))
@@ -453,24 +464,81 @@ describe("casefile ledger", () => {
       ).rejects.toThrow(/Cannot jump hypothesis → reported/);
     });
 
-    test("investigating → confirmed requires all four fields", async () => {
+    test("investigating → confirmed via CaseUpdate is rejected", async () => {
       const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
-      await expect(updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i" })).rejects.toThrow(/severity/);
-      await expect(updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", severity: "high" })).rejects.toThrow(/impact/);
-      await expect(updateCaseResult(r.id, { status: "confirmed", poc: "p", impact: "i", severity: "high" })).rejects.toThrow(/evidence/);
-      await expect(updateCaseResult(r.id, { status: "confirmed", evidence: "e", impact: "i", severity: "high" })).rejects.toThrow(/poc/);
+      await expect(
+        updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i", severity: "high" }),
+      ).rejects.toThrow(/promote_finding/);
     });
 
-    test("investigating → confirmed succeeds with all four fields", async () => {
-      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
-      const out = await updateCaseResult(r.id, {
-        status: "confirmed",
-        poc: "poc script",
-        evidence: "exit code 0",
-        impact: "rce",
-        severity: "critical",
+    test("promoteFindingResult requires the four confirmation fields", async () => {
+      const base = await addCase({
+        title: "t",
+        status: "investigating",
+        evidence: "x",
+        confidence: "low",
+        poc: "p",
+        impact: "i",
+        severity: "high",
+      });
+
+      await updateCaseResult(base.id, { poc: "" });
+      await expect(
+        promoteFindingResult(base.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" }),
+      ).rejects.toThrow(/poc/);
+      await updateCaseResult(base.id, { poc: "p" });
+
+      await updateCaseResult(base.id, { evidence: "" });
+      await expect(
+        promoteFindingResult(base.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" }),
+      ).rejects.toThrow(/evidence/);
+      await updateCaseResult(base.id, { evidence: "x" });
+
+      await updateCaseResult(base.id, { impact: "" });
+      await expect(
+        promoteFindingResult(base.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" }),
+      ).rejects.toThrow(/impact/);
+      await updateCaseResult(base.id, { impact: "i" });
+
+      await updateCaseResult(base.id, { severity: "" });
+      await expect(
+        promoteFindingResult(base.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" }),
+      ).rejects.toThrow(/severity/);
+    });
+
+    test("promoteFindingResult rejects a non-zero exit code", async () => {
+      const r = await addCase({
+        title: "t",
+        status: "investigating",
+        evidence: "x",
+        confidence: "low",
+        poc: "p",
+        impact: "i",
+        severity: "high",
+      });
+      await expect(
+        promoteFindingResult(r.id, { path: "/poc", exitCode: 1, ranAt: "2024-01-01T00:00:00Z", output: "fail" }),
+      ).rejects.toThrow(/exit 1/);
+    });
+
+    test("promoteFindingResult promotes to confirmed on exit 0", async () => {
+      const r = await addCase({
+        title: "t",
+        status: "investigating",
+        evidence: "x",
+        confidence: "low",
+        poc: "p",
+        impact: "i",
+        severity: "high",
+      });
+      const out = await promoteFindingResult(r.id, {
+        path: "/poc",
+        exitCode: 0,
+        ranAt: "2024-01-01T00:00:00Z",
+        output: "ok",
       });
       expect(out.record.status).toBe("confirmed");
+      expect(out.record.pocVerified).toMatchObject({ path: "/poc", exitCode: 0 });
     });
 
     test("killed is terminal", async () => {
@@ -481,9 +549,18 @@ describe("casefile ledger", () => {
       ).rejects.toThrow(/Cannot revive a killed case/);
     });
 
+    test("confirmed → reported requires a report", async () => {
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low", poc: "p", impact: "i", severity: "high" });
+      await promoteFindingResult(r.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" });
+      await expect(
+        updateCaseResult(r.id, { status: "reported", remediation: "fix" }),
+      ).rejects.toThrow(/run CaseReport first/);
+    });
+
     test("reported is terminal", async () => {
-      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
-      await updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i", severity: "high" });
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low", poc: "p", impact: "i", severity: "high" });
+      await promoteFindingResult(r.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" });
+      await writeCaseReport(r.id);
       await updateCaseResult(r.id, { status: "reported", remediation: "fix" });
       await expect(
         updateCaseResult(r.id, { status: "investigating" }),
@@ -504,8 +581,8 @@ describe("casefile ledger", () => {
     });
 
     test("confirmed → investigating rework is allowed", async () => {
-      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
-      await updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i", severity: "high" });
+      const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low", poc: "p", impact: "i", severity: "high" });
+      await promoteFindingResult(r.id, { path: "/poc", exitCode: 0, ranAt: "2024-01-01T00:00:00Z" });
       const out = await updateCaseResult(r.id, { status: "investigating" });
       expect(out.record.status).toBe("investigating");
     });

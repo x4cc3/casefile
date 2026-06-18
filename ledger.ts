@@ -51,6 +51,12 @@ export type CaseRecord = {
   tags?: string[];
   /** Explicit assumptions or unknowns to avoid overstating exploitability. */
   assumptions?: string[];
+  /** Verification of an on-disk PoC run (set only by promoteFindingResult). */
+  pocVerified?: { path: string; exitCode: number; ranAt: string; output?: string };
+  /** ISO timestamp when CaseReport first wrote the markdown report. */
+  reportedAt?: string;
+  /** Path to the generated markdown report (set only by writeCaseReport). */
+  reportPath?: string;
   linkedCaseIds: string[];
   createdAt: string;
   updatedAt: string;
@@ -79,6 +85,10 @@ type CaseInput = {
 
 type NormalizedCaseInput = Partial<CaseInput> & {
   linkedCaseIds?: string[];
+  /** Internal-only fields used by ledger-level helpers (not settable via tools). */
+  pocVerified?: CaseRecord["pocVerified"];
+  reportedAt?: string;
+  reportPath?: string;
 };
 
 type CaseUpdate = Partial<CaseInput>;
@@ -380,7 +390,12 @@ function validateCase(record: CaseRecord): void {
 // stricter than checking inherited values but makes the gate deterministic
 // (confidence always has a default, so checking the merged record could never
 // fail). Upgrade path: none, this is the intended shape.
-function validateTransition(from: CaseStatus, to: CaseStatus, update: CaseUpdate): void {
+function validateTransition(
+  from: CaseStatus,
+  to: CaseStatus,
+  update: CaseUpdate,
+  current?: CaseRecord,
+): void {
   if (from === to) return; // no-op status restatement is handled by material-equality check
 
   // Terminal states are immutable.
@@ -396,7 +411,7 @@ function validateTransition(from: CaseStatus, to: CaseStatus, update: CaseUpdate
   // blocked is reachable from any non-terminal state; validateCase enforces blockers[].
   if (to === "blocked") return;
 
-  type Rule = (u: CaseUpdate) => string | null;
+  type Rule = (u: CaseUpdate, current?: CaseRecord) => string | null;
   const transitions: Partial<Record<CaseStatus, Partial<Record<CaseStatus, Rule>>>> = {
     hypothesis: {
       investigating: (u) =>
@@ -408,17 +423,16 @@ function validateTransition(from: CaseStatus, to: CaseStatus, update: CaseUpdate
       // hypothesis → blocked handled by validateCase
     },
     investigating: {
-      confirmed: (u) =>
-        !u.poc ? "CONFIRMED requires poc (PoC exploit code)" :
-        !u.evidence ? "CONFIRMED requires evidence (PoC output, exit code)" :
-        !u.impact ? "CONFIRMED requires impact (technical + real-world)" :
-        !u.severity ? "CONFIRMED requires severity rating" :
-        null,
+      // confirmed is only reachable through promoteFindingResult, which verifies an on-disk PoC.
+      confirmed: () => "investigating → confirmed requires a verified PoC run; use the promote_finding tool",
       hypothesis: () => null, // downgrade allowed
       // investigating → blocked handled by validateCase
     },
     confirmed: {
-      reported: () => null,
+      reported: (_, current) =>
+        !current?.reportPath
+          ? "confirmed → reported requires a report; run CaseReport first"
+          : null,
       investigating: () => null, // rework allowed
       // confirmed → blocked handled by validateCase
     },
@@ -428,7 +442,7 @@ function validateTransition(from: CaseStatus, to: CaseStatus, update: CaseUpdate
   if (rule === undefined) {
     throw new Error(`Invalid transition: ${from} → ${to}`);
   }
-  const reason = rule(update);
+  const reason = rule(update, current);
   if (reason) {
     throw new Error(`Cannot transition ${from} → ${to}: ${reason}`);
   }
@@ -437,6 +451,14 @@ function validateTransition(from: CaseStatus, to: CaseStatus, update: CaseUpdate
 function validateNewCaseInput(input: CaseInput): void {
   if (input.status && input.status !== "hypothesis" && input.status !== "investigating") {
     throw new Error("New cases must start as hypothesis or investigating; promote with CaseUpdate after validation");
+  }
+  if (input.status === "investigating") {
+    if (!input.evidence) {
+      throw new Error("New investigating cases require evidence (source→sink trace)");
+    }
+    if (!input.confidence) {
+      throw new Error("New investigating cases require a confidence level");
+    }
   }
 }
 
@@ -474,6 +496,9 @@ function buildRecord(
     blockers: normalizeList(input.blockers ?? existing?.blockers),
     tags: normalizeList(input.tags ?? existing?.tags),
     assumptions: normalizeList(input.assumptions ?? existing?.assumptions),
+    pocVerified: input.pocVerified ?? existing?.pocVerified,
+    reportedAt: input.reportedAt ?? existing?.reportedAt,
+    reportPath: input.reportPath ?? existing?.reportPath,
     linkedCaseIds: normalizeList(
       input.linkedCaseIds ?? existing?.linkedCaseIds,
     ).filter((lid) => lid !== id),
@@ -599,7 +624,7 @@ export async function updateCaseResult(
     // sees the actionable transition reason (e.g. "requires poc, evidence,
     // impact, severity") rather than the generic validateCase message.
     if (update.status && update.status !== current.status) {
-      validateTransition(current.status, next.status, update);
+      validateTransition(current.status, next.status, update, current);
     }
     validateCase(next);
 
@@ -617,6 +642,65 @@ export async function updateCaseResult(
     }
 
     // Append updated record — dedup on read picks up the latest version
+    const ledgerPath = getCasefilePath();
+    await mkdir(dirname(ledgerPath), { recursive: true });
+    await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
+    return { record: next, changed: true };
+  });
+}
+
+// ── Promote (verified PoC required) ───────────────────────────────────
+
+export type PocVerification = {
+  path: string;
+  exitCode: number;
+  ranAt: string;
+  output?: string;
+};
+
+/**
+ * Promote an investigating case to confirmed after a verified PoC run.
+ * This is the only privileged path to confirmed; direct CaseUpdate promotions
+ * are rejected by validateTransition.
+ */
+export async function promoteFindingResult(
+  id: string,
+  verification: PocVerification,
+): Promise<CaseUpdateResult> {
+  return withLedgerMutation(async () => {
+    const records = await readCasefile();
+    const current = records.find((r) => r.id === id);
+    if (!current) {
+      throw new Error(`Case not found: ${id}`);
+    }
+    if (current.status !== "investigating") {
+      throw new Error(`promote_finding requires an investigating case (current: ${current.status})`);
+    }
+    if (!current.poc) {
+      throw new Error("CONFIRMED requires poc; set poc on the case first");
+    }
+    if (!current.evidence) {
+      throw new Error("CONFIRMED requires evidence; set evidence on the case first");
+    }
+    if (!current.impact) {
+      throw new Error("CONFIRMED requires impact; set impact on the case first");
+    }
+    if (!current.severity) {
+      throw new Error("CONFIRMED requires severity; set severity on the case first");
+    }
+    if (verification.exitCode !== 0) {
+      throw new Error(`PoC verification failed (exit ${verification.exitCode}); cannot promote to confirmed`);
+    }
+
+    const next = buildRecord(
+      {
+        status: "confirmed",
+        pocVerified: verification,
+      },
+      current,
+    );
+    validateCase(next);
+
     const ledgerPath = getCasefilePath();
     await mkdir(dirname(ledgerPath), { recursive: true });
     await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
@@ -808,7 +892,12 @@ export function formatCaseDetail(record: CaseRecord): string {
   for (const [key, val] of Object.entries(record)) {
     if (!val || (Array.isArray(val) && !val.length) || ["id", "createdAt", "updatedAt"].includes(key)) continue;
     const label = key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, " $1");
-    lines.push(`${label.padEnd(12)} ${Array.isArray(val) ? val.join(", ") : val}`);
+    const display = Array.isArray(val)
+      ? val.join(", ")
+      : typeof val === "object"
+        ? JSON.stringify(val)
+        : val;
+    lines.push(`${label.padEnd(12)} ${display}`);
   }
   return lines.concat([`Created:     ${record.createdAt}`, `Updated:     ${record.updatedAt}`]).join("\n");
 }
@@ -826,36 +915,50 @@ function mdSection(title: string, body?: string): string {
 }
 
 export async function writeCaseReport(id: string): Promise<{ path: string; record: CaseRecord }> {
-  const records = await readCasefile();
-  const record = records.find((r) => r.id === id);
-  if (!record) throw new Error(`Case not found: ${id}`);
-  if (record.status !== "confirmed" && record.status !== "reported") {
-    throw new Error("Case reports require a confirmed or reported case");
-  }
+  return withLedgerMutation(async () => {
+    const records = await readCasefile();
+    const current = records.find((r) => r.id === id);
+    if (!current) throw new Error(`Case not found: ${id}`);
+    if (current.status !== "confirmed" && current.status !== "reported") {
+      throw new Error("Case reports require a confirmed or reported case");
+    }
 
-  const reportDir = getCasefileReportDir();
-  await mkdir(reportDir, { recursive: true });
-  const reportPath = join(reportDir, `${slugify(record.title)}-${record.id}.md`);
-  const references = record.references?.length ? record.references.map((r) => `- ${r}`).join("\n") : undefined;
-  const assumptions = record.assumptions?.length ? record.assumptions.map((a) => `- ${a}`).join("\n") : undefined;
-  const body = [
-    `# ${record.title}`,
-    `**Severity:** ${record.severity ?? "Not assessed"}`,
-    `**Status:** ${record.status}`,
-    `**Confidence:** ${record.confidence}`,
-    record.priority ? `**Priority:** ${record.priority}` : undefined,
-    record.target ? `**Target:** ${record.target}` : undefined,
-    record.endpoint ? `**Endpoint:** ${record.endpoint}` : undefined,
-    record.bugClass ? `**Bug class:** ${record.bugClass}` : undefined,
-    "",
-    mdSection("Summary", record.summary),
-    mdSection("Steps to Reproduce / Evidence", record.evidence),
-    mdSection("Proof of Concept", record.poc),
-    mdSection("Impact", record.impact),
-    mdSection("Remediation", record.remediation),
-    mdSection("Assumptions and Uncertainty", assumptions),
-    mdSection("References", references),
-  ].filter(Boolean).join("\n");
-  await writeFile(reportPath, body, "utf8");
-  return { path: reportPath, record };
+    const reportDir = getCasefileReportDir();
+    await mkdir(reportDir, { recursive: true });
+    const reportPath = join(reportDir, `${slugify(current.title)}-${current.id}.md`);
+    const references = current.references?.length ? current.references.map((r) => `- ${r}`).join("\n") : undefined;
+    const assumptions = current.assumptions?.length ? current.assumptions.map((a) => `- ${a}`).join("\n") : undefined;
+    const body = [
+      `# ${current.title}`,
+      `**Severity:** ${current.severity ?? "Not assessed"}`,
+      `**Status:** ${current.status}`,
+      `**Confidence:** ${current.confidence}`,
+      current.priority ? `**Priority:** ${current.priority}` : undefined,
+      current.target ? `**Target:** ${current.target}` : undefined,
+      current.endpoint ? `**Endpoint:** ${current.endpoint}` : undefined,
+      current.bugClass ? `**Bug class:** ${current.bugClass}` : undefined,
+      "",
+      mdSection("Summary", current.summary),
+      mdSection("Steps to Reproduce / Evidence", current.evidence),
+      mdSection("Proof of Concept", current.poc),
+      mdSection("Impact", current.impact),
+      mdSection("Remediation", current.remediation),
+      mdSection("Assumptions and Uncertainty", assumptions),
+      mdSection("References", references),
+    ].filter(Boolean).join("\n");
+    await writeFile(reportPath, body, "utf8");
+
+    const next: CaseRecord = {
+      ...current,
+      reportPath,
+      reportedAt: current.reportedAt ?? nowIso(),
+      updatedAt: nowIso(),
+    };
+    if (!casesMateriallyEqual(current, next)) {
+      const ledgerPath = getCasefilePath();
+      await mkdir(dirname(ledgerPath), { recursive: true });
+      await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
+    }
+    return { path: reportPath, record: next };
+  });
 }

@@ -15,12 +15,14 @@ import {
   formatCases,
   getCasefilePath,
   linkCasesResult,
+  promoteFindingResult,
   readCasefile,
   searchCases,
   unlinkCasesResult,
   updateCaseResult,
   writeCaseReport,
 } from "../ledger.js";
+import { runPoc } from "../poc-runner.js";
 
 type CasefileMcpToolResult = {
   content: [{ type: "text"; text: string }];
@@ -85,7 +87,7 @@ async function runTool(
 export function createCasefileMcpServer(): McpServer {
   const server = new McpServer({
     name: "casefile",
-    version: "1.3.0",
+    version: "1.3.5",
   });
 
   server.registerTool(
@@ -137,6 +139,37 @@ export function createCasefileMcpServer(): McpServer {
         ? `Case updated:\n${formatCaseDetail(result.record)}`
         : `Case unchanged: ${result.reason ?? "no material fields changed"}\n${formatCaseDetail(result.record)}`;
       return { text, structuredContent: result };
+    }),
+  );
+
+  server.registerTool(
+    "casefile_promote",
+    {
+      title: "Promote Finding",
+      description: "Run an on-disk PoC in an isolated docker sandbox and, on exit 0, promote an investigating case to confirmed.",
+      inputSchema: {
+        id: z.string().describe("Case ID to promote"),
+        poc_path: z.string().describe("Absolute path to the PoC script on disk"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (params) => runTool(async () => {
+      const run = runPoc(params.poc_path);
+      const result = await promoteFindingResult(params.id, {
+        path: run.path,
+        exitCode: run.exitCode,
+        ranAt: run.ranAt,
+        output: run.output,
+      });
+      const text = run.exitCode === 0
+        ? `PoC verified (exit ${run.exitCode}). Case promoted to confirmed:\n${formatCaseDetail(result.record)}`
+        : `PoC failed (exit ${run.exitCode}). Case remains investigating.\nOutput:\n${run.output}`;
+      return { text, structuredContent: { ...result, run } };
     }),
   );
 

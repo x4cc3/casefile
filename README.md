@@ -160,8 +160,17 @@ Each line is a complete JSON record. Features:
 ## Offensive Security Workflow
 
 1. **Hypothesize** — `CaseAdd` with `status: hypothesis`
-2. **Investigate** — `CaseUpdate` to `status: investigating`, add `evidence`
-3. **Confirm** — `CaseUpdate` to `status: confirmed`, set `severity`, write `poc`
+2. **Investigate** — `CaseUpdate` to `status: investigating`, add `evidence` and `confidence`
+3. **Confirm** — `PromoteFinding` with `poc_path` to run the PoC and verify exit 0 (direct `CaseUpdate` to confirmed is rejected)
 4. **Chain** — `CaseLink` to connect primitives to escalations
 5. **Report** — `CaseReport` to draft markdown, then `CaseUpdate` to `status: reported`, add `remediation` and `references`
 6. **Kill** — `CaseUpdate` to `status: killed` for dead ends, duplicates, or disproven leads; include `evidence`, `blockers`, or `assumptions` explaining why
+
+### State Machine Gates
+
+Transitions are strictly enforced by the ledger:
+- `hypothesis` → `investigating` requires `evidence` and `confidence`.
+- `investigating` → `confirmed` requires `PromoteFinding` (which runs the PoC and verifies exit 0) and the four confirmation fields (`poc`, `evidence`, `impact`, `severity`).
+- `confirmed` → `reported` requires `CaseReport` to run first.
+- `killed` and `reported` are **terminal states**. You cannot revive them; open a new case instead.
+- Skipping states (`hypothesis` → `confirmed` or `hypothesis` → `reported`) is rejected.

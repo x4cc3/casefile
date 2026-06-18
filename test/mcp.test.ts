@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdtemp, rm } from "fs/promises";
@@ -7,6 +7,10 @@ import { tmpdir } from "os";
 
 import { createCasefileMcpServer } from "../mcp/server.ts";
 import { readCasefile, setCasefilePath } from "../ledger.ts";
+
+mock.module("../poc-runner.js", () => ({
+  runPoc: () => ({ path: "/mock/poc.sh", exitCode: 0, output: "ok", ranAt: "2024-01-01T00:00:00Z" }),
+}));
 
 let tempDir: string;
 
@@ -43,6 +47,7 @@ describe("casefile MCP server", () => {
         "casefile_get",
         "casefile_link",
         "casefile_list",
+        "casefile_promote",
         "casefile_report",
         "casefile_search",
         "casefile_unlink",
@@ -68,7 +73,6 @@ describe("casefile MCP server", () => {
         name: "casefile_update",
         arguments: {
           id: created.record.id,
-          status: "confirmed",
           confidence: "high",
           severity: "high",
           poc: "Request the fetch endpoint with a collaborator URL and observe the callback",
@@ -76,7 +80,16 @@ describe("casefile MCP server", () => {
           evidence: "Backend fetches user-provided URLs",
         },
       });
-      expect((updated.structuredContent as any).record.status).toBe("confirmed");
+      expect((updated.structuredContent as any).record.status).toBe("investigating");
+
+      const promoted = await client.callTool({
+        name: "casefile_promote",
+        arguments: {
+          id: created.record.id,
+          poc_path: "/mock/poc.sh",
+        },
+      });
+      expect((promoted.structuredContent as any).record.status).toBe("confirmed");
 
       const searched = await client.callTool({
         name: "casefile_search",
