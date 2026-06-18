@@ -15,7 +15,7 @@ export type PocRun = {
  * Python (.py) and shell (.sh) scripts are supported; anything else is run
  * as a shell script in alpine. The PoC path is mounted read-only.
  *
- * ponytail: naive runner — only supports local docker. Upgrade path: add
+ * Naive runner — only supports local docker. Upgrade path: add
  * containerd/podman fallback, configurable timeout, or per-case runner image.
  */
 export function runPoc(pocPath: string): PocRun {

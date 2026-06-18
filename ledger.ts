@@ -353,7 +353,6 @@ function validateCase(record: CaseRecord): void {
 // Per-target-state field gates remain in validateCase; this only checks the
 // transition itself and the fields the caller provided on this step.
 //
-// ponytail: required fields are checked on the update delta, not the merged
 // record — promotion must re-assert evidence at the promotion call. This is
 // stricter than checking inherited values but makes the gate deterministic
 // (confidence always has a default, so checking the merged record could never
@@ -430,7 +429,6 @@ function validateNewCaseInput(input: CaseInput): void {
   }
 }
 
-// ponytail: buildRecord/normalizeCase split exists so updateCaseResult can run
 // validateTransition before validateCase — transition errors are more
 // actionable than the generic target-state field errors. Upgrade path: none,
 // this is the intended shape.
