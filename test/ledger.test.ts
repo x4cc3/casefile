@@ -4,20 +4,21 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 import {
-  addCase,
   addCaseResult,
   getCasefilePath,
-  linkCases,
   linkCasesResult,
   promoteFindingResult,
   readCasefile,
   searchCases,
   setCasefilePath,
-  unlinkCases,
   unlinkCasesResult,
   updateCaseResult,
   writeCaseReport,
 } from "../ledger.ts";
+
+// ponytail: test convenience wrapper, not exported from ledger
+const addCase = (input: Parameters<typeof addCaseResult>[0]) =>
+  addCaseResult(input).then((r) => r.record);
 
 let tempDir: string;
 let ledgerPath: string;
@@ -275,7 +276,7 @@ describe("casefile ledger", () => {
       evidence: "Redirect can target attacker callback",
     });
 
-    const linked = await linkCases(primitive.id, escalation.id);
+    const linked = await linkCasesResult(primitive.id, escalation.id);
     expect(linked.source.linkedCaseIds).toEqual([escalation.id]);
     expect(linked.target.linkedCaseIds).toEqual([primitive.id]);
 
@@ -287,7 +288,7 @@ describe("casefile ledger", () => {
     expect(afterLink.find((r) => r.id === primitive.id)?.linkedCaseIds).toEqual([escalation.id]);
     expect(afterLink.find((r) => r.id === escalation.id)?.linkedCaseIds).toEqual([primitive.id]);
 
-    await unlinkCases(primitive.id, escalation.id);
+    await unlinkCasesResult(primitive.id, escalation.id);
     const duplicateUnlink = await unlinkCasesResult(primitive.id, escalation.id);
     expect(duplicateUnlink.changed).toBe(false);
     expect(duplicateUnlink.reason).toBe("Cases are not linked");
@@ -591,6 +592,26 @@ describe("casefile ledger", () => {
       const r = await addCase({ title: "t", status: "investigating", evidence: "x", confidence: "low" });
       const out = await updateCaseResult(r.id, { status: "hypothesis" });
       expect(out.record.status).toBe("hypothesis");
+    });
+
+    test("blocked → investigating resume is allowed (blocked is non-terminal)", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      await updateCaseResult(r.id, { status: "blocked", blockers: ["WAF blocks payload"] });
+      const out = await updateCaseResult(r.id, {
+        status: "investigating",
+        evidence: "bypass found",
+        confidence: "medium",
+      });
+      expect(out.changed).toBe(true);
+      expect(out.record.status).toBe("investigating");
+    });
+
+    test("blocked → confirmed still requires the promote path", async () => {
+      const r = await addCase({ title: "t", status: "hypothesis" });
+      await updateCaseResult(r.id, { status: "blocked", blockers: ["WAF blocks payload"] });
+      await expect(
+        updateCaseResult(r.id, { status: "confirmed", poc: "p", evidence: "e", impact: "i", severity: "high" }),
+      ).rejects.toThrow(/Invalid transition: blocked → confirmed/);
     });
   });
 });

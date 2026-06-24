@@ -13,6 +13,7 @@ import { existsSync } from "fs";
 import { mkdir, readFile, appendFile, writeFile, rename, open, rm, stat } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { homedir } from "os";
+import { setTimeout as sleep } from "timers/promises";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -159,29 +160,18 @@ function normalizeMatchText(value: string | undefined): string {
   return normalizeText(value)?.toLowerCase().replace(/\s+/g, " ") ?? "";
 }
 
-function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function hasDefined<T extends object>(value: T, key: keyof T): boolean {
-  return hasOwn(value, key) && value[key] !== undefined;
-}
-
 function assertNoDirectLinkMutation(value: object): void {
-  if (hasOwn(value, "linkedCaseIds")) {
+  if ("linkedCaseIds" in value) {
     throw new Error("Case links must be changed with linkCases or unlinkCases");
   }
 }
 
 function normalizeOptionalText(
   input: NormalizedCaseInput,
-  field: keyof Pick<
-    CaseInput,
-    "target" | "endpoint" | "bugClass" | "summary" | "evidence" | "impact" | "nextStep" | "poc" | "remediation"
-  >,
+  field: keyof CaseInput,
   existing?: CaseRecord,
 ): string | undefined {
-  if (hasOwn(input, field)) return normalizeText(input[field]);
+  if (field in input) return normalizeText(input[field] as string | undefined);
   return existing?.[field];
 }
 
@@ -194,23 +184,21 @@ function casesMateriallyEqual(left: CaseRecord, right: CaseRecord): boolean {
   return normalize(left) === normalize(right);
 }
 
-function noChangeReason(current: CaseRecord, update: CaseUpdate): string {
-  if (update.status && update.status === current.status) {
-    return `Case is already ${current.status}; no material fields changed.`;
-  }
-  return "No material fields changed.";
-}
-
 function findDuplicateCase(records: CaseRecord[], candidate: CaseRecord): CaseRecord | undefined {
   const title = normalizeMatchText(candidate.title);
   if (!title) return undefined;
 
+  // ponytail: normalize candidate fields once, not per-record
+  const target = normalizeMatchText(candidate.target);
+  const endpoint = normalizeMatchText(candidate.endpoint);
+  const bugClass = normalizeMatchText(candidate.bugClass);
+
   return records.find((record) =>
     record.status !== "killed" &&
     normalizeMatchText(record.title) === title &&
-    normalizeMatchText(record.target) === normalizeMatchText(candidate.target) &&
-    normalizeMatchText(record.endpoint) === normalizeMatchText(candidate.endpoint) &&
-    normalizeMatchText(record.bugClass) === normalizeMatchText(candidate.bugClass)
+    normalizeMatchText(record.target) === target &&
+    normalizeMatchText(record.endpoint) === endpoint &&
+    normalizeMatchText(record.bugClass) === bugClass
   );
 }
 
@@ -227,7 +215,7 @@ function firstEnv(...names: string[]): { name: string; value: string } | undefin
   return undefined;
 }
 
-import { setTimeout as sleep } from "timers/promises";
+
 
 function detectWorkspaceRoot(): string {
   const envs = ["CASEFILE_WORKSPACE_ROOT", "CODEX_WORKSPACE_ROOT", "PI_WORKSPACE_ROOT", "GITHUB_WORKSPACE", "PWD"];
@@ -260,10 +248,6 @@ export function getCasefilePath(): string {
     ? ".casefile"
     : ".pi";
   return join(detectWorkspaceRoot(), projectDir, "casefile.jsonl");
-}
-
-function getCasefileReportDir(): string {
-  return join(dirname(getCasefilePath()), "report");
 }
 
 async function acquireLedgerLock(): Promise<() => Promise<void>> {
@@ -306,6 +290,7 @@ async function acquireLedgerLock(): Promise<() => Promise<void>> {
 
 async function withLedgerMutation<T>(fn: () => Promise<T>): Promise<T> {
   const run = mutationQueue.then(async () => {
+    await mkdir(dirname(getCasefilePath()), { recursive: true });
     const release = await acquireLedgerLock();
     try {
       return await fn();
@@ -403,6 +388,16 @@ function validateTransition(
       investigating: () => null, // rework allowed
       // confirmed → blocked handled by validateCase
     },
+    blocked: {
+      // blocked is non-terminal: a resolved blocker can resume work.
+      investigating: (u) =>
+        !u.evidence ? "INVESTIGATING requires evidence (source→sink trace)" :
+        !u.confidence ? "INVESTIGATING requires confidence level" :
+        null,
+      hypothesis: () => null, // downgrade allowed
+      // blocked → confirmed still requires the promote path; blocked → killed
+      // handled by the early `to === "killed"` return.
+    },
   };
 
   const rule = transitions[from]?.[to];
@@ -437,7 +432,7 @@ function buildRecord(
   existing?: CaseRecord,
 ): CaseRecord {
   const timestamp = nowIso();
-  const title = (hasOwn(input, "title") ? input.title : existing?.title)?.trim() ?? "";
+  const title = ("title" in input ? input.title : existing?.title)?.trim() ?? "";
   const id =
     existing?.id ??
     `case_${stableShortId(`${title}\n${timestamp}\n${randomUUID()}`)}`;
@@ -471,15 +466,6 @@ function buildRecord(
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
-}
-
-function normalizeCase(
-  input: NormalizedCaseInput,
-  existing?: CaseRecord,
-): CaseRecord {
-  const record = buildRecord(input, existing);
-  validateCase(record);
-  return record;
 }
 
 // ── Read (with dedup — last write wins) ────────────────────────────────
@@ -525,7 +511,8 @@ export async function addCaseResult(input: CaseInput): Promise<CaseAddResult> {
   return withLedgerMutation(async () => {
     assertNoDirectLinkMutation(input);
     validateNewCaseInput(input);
-    const record = normalizeCase(input);
+    const record = buildRecord(input, undefined);
+    validateCase(record);
     const records = await readCasefile();
     const duplicate = findDuplicateCase(records, record);
     if (duplicate) {
@@ -536,16 +523,9 @@ export async function addCaseResult(input: CaseInput): Promise<CaseAddResult> {
       };
     }
 
-    const ledgerPath = getCasefilePath();
-    await mkdir(dirname(ledgerPath), { recursive: true });
-    await appendFile(ledgerPath, `${JSON.stringify(record)}\n`, "utf8");
+    await appendFile(getCasefilePath(), `${JSON.stringify(record)}\n`, "utf8");
     return { record, created: true };
   });
-}
-
-export async function addCase(input: CaseInput): Promise<CaseRecord> {
-  const result = await addCaseResult(input);
-  return result.record;
 }
 
 // ── Update (append-based — dedup on read picks up latest) ────────────
@@ -561,22 +541,22 @@ export async function updateCaseResult(
     if (!current) {
       throw new Error(`Case not found: ${id}`);
     }
+    // ponytail: loop over optional text fields instead of 9 repetitive hasDefined checks
+    const optionalFields = ["title", "target", "endpoint", "bugClass", "summary", "evidence", "impact", "nextStep", "poc", "remediation"] as const;
+    const optionalPatch: Record<string, unknown> = {};
+    for (const field of optionalFields) {
+      if (field in update && update[field] !== undefined) {
+        optionalPatch[field] = update[field];
+      }
+    }
+
     const next = buildRecord(
       {
-        ...(hasDefined(update, "title") ? { title: update.title } : {}),
+        ...optionalPatch,
         status: update.status ?? current.status,
         confidence: update.confidence ?? current.confidence,
         severity: update.severity ?? current.severity,
         priority: update.priority ?? current.priority,
-        ...(hasDefined(update, "target") ? { target: update.target } : {}),
-        ...(hasDefined(update, "endpoint") ? { endpoint: update.endpoint } : {}),
-        ...(hasDefined(update, "bugClass") ? { bugClass: update.bugClass } : {}),
-        ...(hasDefined(update, "summary") ? { summary: update.summary } : {}),
-        ...(hasDefined(update, "evidence") ? { evidence: update.evidence } : {}),
-        ...(hasDefined(update, "impact") ? { impact: update.impact } : {}),
-        ...(hasDefined(update, "nextStep") ? { nextStep: update.nextStep } : {}),
-        ...(hasDefined(update, "poc") ? { poc: update.poc } : {}),
-        ...(hasDefined(update, "remediation") ? { remediation: update.remediation } : {}),
         references: update.references ?? current.references,
         blockers: update.blockers ?? current.blockers,
         tags: update.tags ?? current.tags,
@@ -595,7 +575,10 @@ export async function updateCaseResult(
     validateCase(next);
 
     if (casesMateriallyEqual(current, next)) {
-      return { record: current, changed: false, reason: noChangeReason(current, update) };
+      const reason = update.status && update.status === current.status
+        ? `Case is already ${current.status}; no material fields changed.`
+        : "No material fields changed.";
+      return { record: current, changed: false, reason };
     }
 
     const duplicate = findDuplicateCase(records.filter((r) => r.id !== id), next);
@@ -608,16 +591,14 @@ export async function updateCaseResult(
     }
 
     // Append updated record — dedup on read picks up the latest version
-    const ledgerPath = getCasefilePath();
-    await mkdir(dirname(ledgerPath), { recursive: true });
-    await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
+    await appendFile(getCasefilePath(), `${JSON.stringify(next)}\n`, "utf8");
     return { record: next, changed: true };
   });
 }
 
 // ── Promote (verified PoC required) ───────────────────────────────────
 
-export type PocVerification = {
+type PocVerification = {
   path: string;
   exitCode: number;
   ranAt: string;
@@ -668,22 +649,12 @@ export async function promoteFindingResult(
     );
     validateCase(next);
 
-    const ledgerPath = getCasefilePath();
-    await mkdir(dirname(ledgerPath), { recursive: true });
-    await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
+    await appendFile(getCasefilePath(), `${JSON.stringify(next)}\n`, "utf8");
     return { record: next, changed: true };
   });
 }
 
 // ── Link (atomic: single write for both directions) ──────────────────
-
-export async function linkCases(
-  sourceId: string,
-  targetId: string,
-): Promise<{ source: CaseRecord; target: CaseRecord }> {
-  const { source, target } = await linkCasesResult(sourceId, targetId);
-  return { source, target };
-}
 
 export async function linkCasesResult(
   sourceId: string,
@@ -720,14 +691,6 @@ export async function linkCasesResult(
 }
 
 // ── Unlink (atomic: single write) ────────────────────────────────────
-
-export async function unlinkCases(
-  sourceId: string,
-  targetId: string,
-): Promise<{ source: CaseRecord; target: CaseRecord }> {
-  const { source, target } = await unlinkCasesResult(sourceId, targetId);
-  return { source, target };
-}
 
 export async function unlinkCasesResult(
   sourceId: string,
@@ -884,7 +847,7 @@ export async function writeCaseReport(id: string): Promise<{ path: string; recor
       throw new Error("Case reports require a confirmed or reported case");
     }
 
-    const reportDir = getCasefileReportDir();
+    const reportDir = join(dirname(getCasefilePath()), "report");
     await mkdir(reportDir, { recursive: true });
     const reportPath = join(reportDir, `${slugify(current.title)}-${current.id}.md`);
     const references = current.references?.length ? current.references.map((r) => `- ${r}`).join("\n") : undefined;
@@ -916,9 +879,7 @@ export async function writeCaseReport(id: string): Promise<{ path: string; recor
       updatedAt: nowIso(),
     };
     if (!casesMateriallyEqual(current, next)) {
-      const ledgerPath = getCasefilePath();
-      await mkdir(dirname(ledgerPath), { recursive: true });
-      await appendFile(ledgerPath, `${JSON.stringify(next)}\n`, "utf8");
+      await appendFile(getCasefilePath(), `${JSON.stringify(next)}\n`, "utf8");
     }
     return { path: reportPath, record: next };
   });
